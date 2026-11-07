@@ -93,6 +93,17 @@ def test_whitelist_refuses_attacks(rep, expr):
         ai.compile_spec(rep.con, spec, _paths(rep))
 
 
+def test_var_named_like_a_builtin_is_ignored(rep):
+    paths = {}
+    for pid, a in rep.attrs.items():
+        paths.setdefault(a["PATH"], []).append(pid)
+    path = next(iter(paths))
+    spec = {"name": "shadow", "why": "w", "expr": "flipped AND decision_before IS NOT NULL",
+            "vars": {"decision_before": {"path": path, "side": "before"}}}
+    (x,) = ai.measure_all(rep.con, [spec], paths)
+    assert "refused" not in x and x["n_true"] == x["n_true_flipped"]
+
+
 def test_normal_aggregate_is_measured_exactly(rep):
     spec = {"name": "young_rule_stopped", "where": "age < 21 AND coalesce(n, 0) >= 1",
             "vars": {"age": {"path": "applicant.age", "side": "before", "type": "num"},
@@ -111,6 +122,8 @@ def test_verifier_drops_wrong_numbers_and_false_relations():
     findings = [
         {**base, "title": "ok", "evidence": ["K1"], "text": "{K1.apps} apps changed in `RULE_21`"},
         {**base, "title": "typed", "evidence": ["K1"], "text": "17 apps changed"},
+        {**base, "title": "typed but cited", "evidence": ["K1"], "text": "5 apps, the K1 size"},
+        {**base, "title": "placeholder evidence", "evidence": ["K1.apps"], "text": "{K1.apps} offers with rank=1 in MFO_2026 under AGELOW@21"},
         {**base, "title": "wrong field", "evidence": ["K1"], "text": "{K1.flips} apps flipped"},
         {**base, "title": "uncited", "evidence": ["X1"], "text": "{K1.apps} apps"},
         {**base, "title": "ghost", "evidence": ["K9"], "text": "x"},
@@ -122,11 +135,11 @@ def test_verifier_drops_wrong_numbers_and_false_relations():
          "text": "no app is in both sets ({X1.n_true})"},
     ]
     kept, rejected = ai.verify(findings, idx)
-    assert [f["title"] for f in kept] == ["ok", "true relation"]
+    assert [f["title"] for f in kept] == ["ok", "placeholder evidence", "true relation"]
     assert kept[0]["text"] == "5 apps changed in `RULE_21`" and kept[0]["verified"]
-    assert kept[1]["derived_attribute"] == "overlap: a AND b"
-    assert {r["title"] for r in rejected} == {"typed", "wrong field", "uncited", "ghost", "false relation",
-                                              "unmeasured relation"}
+    assert kept[2]["derived_attribute"] == "overlap: a AND b"
+    assert {r["title"] for r in rejected} == {"typed", "typed but cited", "wrong field", "uncited", "ghost",
+                                              "false relation", "unmeasured relation"}
 
 
 class FakeLLM:
@@ -140,7 +153,8 @@ class FakeLLM:
             def do_POST(self):
                 outer.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
                 status, content = outer.script.pop(0)
-                body = json.dumps({"choices": [{"message": {"content": content}}],
+                content, finish = content if isinstance(content, tuple) else (content, "stop")
+                body = json.dumps({"choices": [{"message": {"content": content}, "finish_reason": finish}],
                                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}}).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -170,6 +184,18 @@ def test_client_falls_back_retries_and_repairs():
     assert [r["response_format"]["type"] for r in fake.requests[1:]] == ["json_object"] * 3
 
 
+def test_answer_cut_at_token_limit_fails_clearly_without_a_blind_repeat():
+    fake = FakeLLM([(200, ('{"analysis": "a", "findings": [', "length"))])
+    try:
+        with pytest.raises(ai.LLMError, match="cut at the output token limit"):
+            fake.client().chat([{"role": "user", "content": "hi"}], ai.SCHEMA2, "findings")
+    finally:
+        fake.srv.shutdown()
+    assert len(fake.requests) == 1 and fake.requests[0]["max_tokens"] == ai.Client.MAX_TOKENS
+    with pytest.raises(ValueError, match="cut off"):
+        ai._parse('{"analysis": "a"', ai.SCHEMA2)
+
+
 def test_opinion_end_to_end_against_fake_endpoint(run):
     spec = {"name": "shifted", "why": "w", "expr": "sa - sb = -140",
             "vars": {"sb": {"path": "score", "side": "before", "type": "num"},
@@ -181,15 +207,19 @@ def test_opinion_end_to_end_against_fake_endpoint(run):
          "evidence": ["X1"], "text": "score dropped by a constant in {X1.n_true} apps", "check_next": "the source"},
         {"title": "made up", "severity": "low", "claim_type": "single_item", "evidence": ["H1"],
          "text": "about 12 apps", "check_next": ""}]}
-    fake = FakeLLM([(200, json.dumps(call1)), (200, json.dumps(call2))])
+    call3 = {"analysis": "a", "findings": [
+        {"title": "share of shifted", "severity": "low", "claim_type": "single_item", "evidence": ["X1"],
+         "text": "{X1.share_true:%} of apps", "check_next": ""}]}
+    fake = FakeLLM([(200, json.dumps(call1)), (200, json.dumps(call2)), (200, json.dumps(call3))])
     try:
         res = ai.opinion(*run, client=fake.client())
     finally:
         fake.srv.shutdown()
     assert {"state", "model", "findings", "usage", "timings", "error"} <= set(res) and res["state"] == "done"
     assert res["measurements"][0]["n_true"] == N // 4 and "refused" in res["measurements"][1]
-    (f,) = res["findings"]
+    f, g = res["findings"]
     assert f["text"] == f"score dropped by a constant in {N // 4} apps" and f["verified"]
+    assert g["text"] == "25,0 % of apps" and "call3_s" in res["timings"]
     assert set(f) == {"title", "severity", "text", "derived_attribute", "evidence", "verified", "check_next"}
     assert [r["title"] for r in res["rejected"]] == ["made up"]
     sent = json.dumps(fake.requests)

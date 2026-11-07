@@ -66,8 +66,14 @@ P presence, C checks, A samples, M schema):
 CALL2 = """TASK (call 2 of 2): the system evaluated your derived attributes. Measurements X (refused specs carry the
 reason; you may not re-submit). Write the final opinion.
 - Keep only hypotheses the measurements support; mark the others as refuted in `analysis`, never in findings.
-- Numbers in text ONLY as placeholders {{ID.field}} pointing at a cited item (e.g. {{X3.n_true}}, {{K2.apps}},
-  {{R5.by_elem.NAME.0}}); never type digits except inside backticked identifiers.
+- Numbers in title, text and check_next ONLY as placeholders {{ID.field}} pointing at a cited item (e.g.
+  {{X3.n_true}}, {{K2.apps}}, {{R5.by_elem.NAME.0}}); never type digits except inside backticked identifiers.
+- `evidence` lists item ids only ("X3", "K2"), never "X3.n_true". Shares as percent: {{X3.flip_rate_true:%}}.
+  Attribute values (cut-off 0.55, product 751) only in backticks: `0.55`, `751`.
+- Measurement fields: n_true = applications where expr is true; n_true_flipped = how many of THEM changed the
+  decision (co-occurrence, not "caused by"); flip_rate_true vs flip_rate_rest = decision-change rate inside vs outside
+  that set. Say "caused by" only from K.causes: the system's counterfactual - restoring that BEFORE factor alone (or
+  the listed combination) reverts exactly that many flips of the cluster.
 - claim_type "relation" (any statement that two sets coincide, overlap, explain or exclude each other) must cite
   the X that measures it and state `expects` (none|some|all) - the system checks it.
 - At most {max_f} findings, most decision-relevant first; each with what to check next.
@@ -78,6 +84,12 @@ JSON schema of your answer:
 (The conversation continues from your call-1 answer; the evidence pack above is still valid.)
 MEASUREMENTS X:
 {derived}"""
+
+REPAIR = """The system rejected these findings (reason given; nothing else was wrong with them):
+{rejected}
+Rewrite ONLY these findings with the same JSON schema: every count or share as a placeholder {{ID.field}} or
+{{ID.field:%}} of a cited item, attribute values in backticks, no other digits in title, text or check_next. Drop a
+finding if its number is not in any item."""
 
 DERIVED = {"type": "object", "required": ["name", "why", "vars", "expr"],
            "properties": {"name": {"type": "string"}, "why": {"type": "string"},
@@ -200,7 +212,8 @@ def build_pack(rep, checks=(), mask=None, budget=PACK_TOKENS):
         K.append({"id": f"K{c['cid']}", "apps": c["apps"], "decision_changed": c["decision_changed"],
                   "origin": c["origin"], "n_paths": len(c["paths"]), "paths": c["paths"][:12],
                   "transitions": [{**t, "before": mask(t["path"], t["before"]), "after": mask(t["path"], t["after"])}
-                                  for t in c["transitions"]], "swap": c["swap"]})
+                                  for t in c["transitions"]], "swap": c["swap"],
+                  "causes": [{"label": x["label"], "apps": x["apps"]} for x in c.get("causes") or []]})
     pack["K"] = K
 
     D = _rows(con, """WITH y AS (SELECT path_id, app_ord, b, a, round(a - b, 6) dl,
@@ -428,15 +441,16 @@ def check_expr(con, expr, names):
 
 def compile_spec(con, spec, paths):
     """SQL + params evaluating one spec into per-app rows ``(cluster, flipped, pop, val)``. ``paths`` maps PATH to
-    its path ids."""
+    its path ids. A var named like a built-in (``decision_before``...) is ignored: the built-in already means it."""
     if not isinstance(spec, dict) or not IDENT.match(str(spec.get("name", ""))):
         raise SpecError("name must match [a-z][a-z0-9_]*")
     vs = spec.get("vars")
     if not isinstance(vs, dict) or not 1 <= len(vs) <= 8:
         raise SpecError("1..8 vars required")
+    vs = {a: v for a, v in vs.items() if a not in BUILTIN}
     ctes, params = [], []
     for alias, v in vs.items():
-        if not IDENT.match(alias) or alias in BUILTIN or not isinstance(v, dict):
+        if not IDENT.match(alias) or not isinstance(v, dict):
             raise SpecError(f"bad var {alias}")
         if v.get("path") not in paths:
             raise SpecError(f"unknown path {v.get('path')} (see schema M)")
@@ -454,7 +468,8 @@ def compile_spec(con, spec, paths):
     expr = check_expr(con, spec.get("expr"), names)
     where = check_expr(con, spec["where"], names) if spec.get("where") else "SELECT true AS e"
     joins = " ".join(f"LEFT JOIN v_{a} USING (app_ord)" for a in vs)
-    sql = (f"WITH {', '.join(ctes)}, v__all AS (SELECT b.*, {', '.join(vs)} FROM base0 b {joins}) "
+    sql = (f"WITH {''.join(c + ', ' for c in ctes)}v__all AS (SELECT {''.join(a + ', ' for a in vs)}b.* "
+           f"FROM base0 b {joins}) "
            f"SELECT cluster, flipped, coalesce(w.e, false) AS pop, coalesce(x.e, false) AS val FROM v__all, "
            f"LATERAL ({where}) w, LATERAL ({expr}) x")
     return sql, params
@@ -497,6 +512,8 @@ PH = re.compile(r"\{([A-Za-z_]\w*)((?:\.[^\s{}.]+)*)\}")
 TICK = re.compile(r"`[^`]*`")
 IDS = re.compile(r"\b[A-Z]\d+\b")
 DIGITS = re.compile(r"\d+(?:[.,]\d+)?")
+ATTR = re.compile(r"[\w.]+\s*=\s*[^\s,;:)]+")
+NAME = re.compile(r"\b[A-Za-z_][\w@]*\d[\w@]*")
 
 
 def _resolve(item, dotted):
@@ -521,15 +538,17 @@ def _apps(item):
 def verify(findings, idx):
     """Fail-closed verification of call-2 findings against ``idx`` (pack items and measurements by id).
 
-    A finding is rejected when it cites an unknown id, when a number in its text is typed instead of a placeholder
-    or a placeholder does not resolve to a cited item, or when it is a ``relation`` claim without an evaluated
+    Evidence written as a placeholder (``X7.n_true``) counts as its item id (``X7``). A finding is rejected when it
+    cites an unknown id, when a number in its text is typed instead of a placeholder
+    or a placeholder does not resolve to a cited item (``name=value`` pairs and names with digits such as
+    ``RULE_2026`` are identifiers, not numbers), or when it is a ``relation`` claim without an evaluated
     measurement, without ``expects`` or contradicted by the measurement. Returns ``(findings, rejected)``.
     """
     kept, rejected = [], []
     for f in findings if isinstance(findings, list) else []:
         if not isinstance(f, dict):
             continue
-        ev = [e for e in f.get("evidence") or [] if isinstance(e, str)]
+        ev = [e if e in idx else e.split(".", 1)[0] for e in f.get("evidence") or [] if isinstance(e, str)]
         xs = [idx[e] for e in ev if e in idx and "n_true" in idx[e]]
         reason, numbers = None, 0
         if not ev or any(e not in idx for e in ev):
@@ -548,14 +567,15 @@ def verify(findings, idx):
             text, bad = str(f.get(key) or ""), []
 
             def sub(m, bad=bad, ev=ev):
-                v = _resolve(idx.get(m.group(1)), m.group(2)) if m.group(1) in ev else None
-                if v is None:
+                dotted, pct = m.group(2).removesuffix(":%"), m.group(2).endswith(":%")
+                v = _resolve(idx.get(m.group(1)), dotted) if m.group(1) in ev else None
+                if v is None or (pct and isinstance(v, str)):
                     bad.append(m.group(0))
                     return "[?]"
-                return str(v)
+                return f"{v * 100:.1f} %".replace(".", ",") if pct else str(v)
             out[key] = PH.sub(sub, text)
             numbers += len(PH.findall(text)) - len(bad)
-            bad += DIGITS.findall(IDS.sub("", TICK.sub("", PH.sub("", text))))
+            bad += DIGITS.findall(NAME.sub("", ATTR.sub("", IDS.sub("", TICK.sub("", PH.sub("", text))))))
             if bad and not reason:
                 reason = f"numbers not from the system in {key}: {bad[:5]}"
         if reason:
@@ -575,6 +595,8 @@ def _parse(text, schema):
     """First JSON object in ``text`` (code fences tolerated) with the schema's required keys."""
     s = text.strip()
     if "{" in s:
+        if "}" not in s:
+            raise ValueError("JSON is cut off before its closing brace")
         s = s[s.index("{"):s.rindex("}") + 1]
     try:
         obj = json.loads(s)
@@ -589,9 +611,12 @@ def _parse(text, schema):
 class Client:
     """OpenAI-compatible chat client: structured output ``json_schema`` -> ``json_object`` -> plain prompt (the
     endpoint's 400/422 on ``response_format`` downgrades the mode), retries on transport errors, 429 and 5xx, one
-    repair round when the answer is not the requested JSON. The schema is always in the prompt as well."""
+    repair round when the answer is not the requested JSON. The schema is always in the prompt as well.
+    ``max_tokens`` is explicit because reasoning models spend hidden reasoning tokens from the same budget; an answer
+    cut at that limit (``finish_reason: length``) fails at once instead of a blind repeat."""
 
     MODES = ("json_schema", "json_object", "prompt")
+    MAX_TOKENS = 16384
 
     def __init__(self, base_url, api_key, model, timeout_s=300, retries=2, backoff_s=1.0):
         self.http = httpx.Client(base_url=base_url.rstrip("/"), headers={"Authorization": f"Bearer {api_key}"},
@@ -614,7 +639,8 @@ class Client:
 
     def _complete(self, messages, schema, name, temperature):
         while True:
-            body = {"model": self.model, "messages": messages, "temperature": temperature}
+            body = {"model": self.model, "messages": messages, "temperature": temperature,
+                    "max_tokens": self.MAX_TOKENS}
             if self.mode == "json_schema":
                 body["response_format"] = {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
             elif self.mode == "json_object":
@@ -631,9 +657,13 @@ class Client:
             self.usage["completion_tokens"] += u.get("completion_tokens") or 0
             self.usage["calls"] += 1
             try:
-                return data["choices"][0]["message"]["content"] or ""
+                choice = data["choices"][0]
+                text = choice["message"]["content"] or ""
             except (KeyError, IndexError, TypeError) as e:
                 raise LLMError("endpoint answer has no choices[0].message.content") from e
+            if choice.get("finish_reason") == "length":
+                raise LLMError(f"answer cut at the output token limit {self.MAX_TOKENS} (usage so far {self.usage})")
+            return text
 
     def chat(self, messages, schema, name, temperature=0.2):
         """Returns ``(parsed JSON object, messages with the assistant answer appended)``."""
@@ -676,10 +706,19 @@ def opinion(run_file, params, checks=(), client=None):
         t["measure_s"] = round(time.perf_counter() - t1, 2)
         msgs.append({"role": "user", "content": CALL2.format(max_f=7, schema=_dump(SCHEMA2), derived=_dump(xs))})
         t1 = time.perf_counter()
-        a2, _ = client.chat(msgs, SCHEMA2, "findings")
+        a2, msgs = client.chat(msgs, SCHEMA2, "findings")
         t["call2_s"] = round(time.perf_counter() - t1, 2)
         idx = {it["id"]: it for items in pack.values() for it in items} | {x["id"]: x for x in xs}
         findings, rejected = verify(a2.get("findings"), idx)
+        a3 = None
+        if any(r["reason"].startswith("numbers not from the system") for r in rejected):
+            msgs.append({"role": "user", "content": REPAIR.format(rejected=_dump(rejected))})
+            t1 = time.perf_counter()
+            a3, _ = client.chat(msgs, SCHEMA2, "findings")
+            t["call3_s"] = round(time.perf_counter() - t1, 2)
+            fixed, still = verify(a3.get("findings"), idx)
+            findings += [f for f in fixed if f["title"] not in {g["title"] for g in findings}]
+            rejected = still + [r for r in rejected if r["title"] not in {f["title"] for f in fixed + still}]
     finally:
         rep.con.close()
     t["total_s"] = round(time.perf_counter() - t0, 2)
@@ -687,4 +726,4 @@ def opinion(run_file, params, checks=(), client=None):
             "usage": {**client.usage, "pack_tokens_est": tokens(pack), "mode": client.mode}, "timings": t,
             "privacy": {"pii_paths": list(params.get("pii_paths") or []), "masked_values": mask.masked,
                         "app_ids_sent": False},
-            "audit": {"call1": a1, "call2": a2}, "error": None}
+            "audit": {"call1": a1, "call2": a2, "call3": a3}, "error": None}

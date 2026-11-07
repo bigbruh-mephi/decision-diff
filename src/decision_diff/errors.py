@@ -189,6 +189,9 @@ def explain(raw):
         return f"Языковая модель ответила ошибкой HTTP {m.group(1)}.{hint}"
     if "LLMError: endpoint unavailable" in raw:
         return "Языковая модель недоступна: сервер не отвечает. Проверьте DD_LLM_BASE_URL и что сервер модели запущен."
+    if "cut at the output token limit" in raw:
+        return ("Ответ языковой модели обрезан лимитом токенов на ответ: модель не успела дописать вывод. Попробуйте "
+                "модель с большим лимитом или без рассуждений.")
     if "LLMError" in raw:
         return "Языковая модель ответила не по формату, мнение не получено. Повторите запрос или смените модель."
     if "evaluate must return" in raw or "sandbox returned an invalid result" in raw:
