@@ -7,7 +7,9 @@ version recorded when it started; loaded modules are cached per process by sha.
 import time
 from pathlib import Path
 
+from . import sandbox
 from .engine import chunk, finalize, ingest, mart, procedures
+from .settings import settings
 
 _cache = {}
 
@@ -36,8 +38,22 @@ def cut_chunk(items, path):
     return len(items)
 
 
+def confined(target, args, read=(), write=()):
+    """Run user-code ``target`` in the sandbox (``DD_SANDBOX=strict``) or in-process (``off``, development only)."""
+    if settings.sandbox == "off":
+        return target(*args)
+    return sandbox.run(target, args, read=read, write=write, wall_s=settings.sandbox_wall_s,
+                       mem_mb=settings.sandbox_mem_mb, uid=settings.sandbox_uid)
+
+
 def run_chunk(input_uri, out_dir, snaps):
-    """Parse, normalize, compare and write one chunk; returns ``(output_uri, stats, stages)``."""
+    """Parse, normalize, compare and write one chunk inside the sandbox; returns ``(output_uri, stats, stages)``."""
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    stats, stages = confined(_chunk_body, (input_uri, out_dir, snaps), read=[input_uri], write=[out_dir])
+    return str(out_dir), stats, stages
+
+
+def _chunk_body(input_uri, out_dir, snaps):
     n, c, s = (_proc(snaps[k]) for k in ("normalize", "compare", "segments"))
     norm = n["params"]
     t0 = time.time()
@@ -55,7 +71,7 @@ def run_chunk(input_uri, out_dir, snaps):
               _stage("compare", c["sha"], a, b, m.num_rows, m.num_rows),
               _stage("segments", s["sha"], b, b + t["segments"], len(apps), sg.num_rows),
               _stage("write", None, t2, t3, rows_out=m.num_rows)]
-    return str(out_dir), stats, stages
+    return stats, stages
 
 
 def run_finalize(chunk_dirs, run_file, snaps):
@@ -68,22 +84,26 @@ def run_finalize(chunk_dirs, run_file, snaps):
 
 
 def run_checks(run_file, check_snaps):
-    """Execute checks over a finished run file; every check result or error becomes one entry."""
-    con = mart.open_run(run_file)
+    """Execute each check in its own sandbox over the finished run file; one result entry per check."""
+    out = []
+    for snap in check_snaps:
+        t0 = time.time()
+        try:
+            chk_id, label, rows = confined(_check_body, (run_file, snap), read=[run_file])
+            out.append({"check_id": chk_id, "sha": snap["sha"], "label": label,
+                        "rows": procedures.validate_check_rows(chk_id, rows),
+                        "duration_ms": (time.time() - t0) * 1000, "error": None})
+        except Exception as e:
+            out.append({"check_id": snap.get("id") or snap["name"], "sha": snap["sha"], "label": snap["name"],
+                        "rows": [], "duration_ms": (time.time() - t0) * 1000, "error": f"{type(e).__name__}: {e}"})
+    return out
+
+
+def _check_body(run_file, snap):
+    chk = _proc({**snap, "kind": "check"})
+    con = mart.open_run(run_file, threads=1)
     try:
-        M = mart.Mart(con)
-        out = []
-        for snap in check_snaps:
-            t0 = time.time()
-            try:
-                chk = _proc({**snap, "kind": "check"})
-                rows = procedures.validate_check_rows(chk["id"], chk["entrypoint"](M, chk["params"]))
-                out.append({"check_id": chk["id"], "sha": snap["sha"], "label": chk["label"], "rows": rows,
-                            "duration_ms": (time.time() - t0) * 1000, "error": None})
-            except Exception as e:
-                out.append({"check_id": snap.get("id") or snap["name"], "sha": snap["sha"], "label": snap["name"],
-                            "rows": [], "duration_ms": (time.time() - t0) * 1000,
-                            "error": f"{type(e).__name__}: {e}"})
-        return out
+        rows = chk["entrypoint"](mart.Mart(con), chk["params"])
+        return chk["id"], chk["label"], rows
     finally:
         con.close()

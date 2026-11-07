@@ -20,6 +20,10 @@ class Settings:
     run_window: int = field(default_factory=lambda: int(_env("DD_RUN_WINDOW", "4")))
     worker_procs: int = field(default_factory=lambda: int(_env("DD_WORKER_PROCS", "4")))
     delivery_limit: int = field(default_factory=lambda: int(_env("DD_DELIVERY_LIMIT", "5")))
+    sandbox: str = field(default_factory=lambda: _env("DD_SANDBOX", "strict"))
+    sandbox_uid: int | None = field(default_factory=lambda: int(_env("DD_SANDBOX_UID", "20000")))
+    sandbox_mem_mb: int = field(default_factory=lambda: int(_env("DD_SANDBOX_MEM_MB", "2048")))
+    sandbox_wall_s: int = field(default_factory=lambda: int(_env("DD_SANDBOX_WALL_S", "300")))
 
     def run_dir(self, run_id):
         return self.data_dir / "runs" / str(run_id)
