@@ -73,21 +73,24 @@ async def close_batch(c, run_id, source, chunks):
                     (chunks, run_id, source))
 
 
-async def dispatch(c, run_id, window):
-    """Move up to ``window - in_flight`` ready chunks of the run to queued; returns chunk tasks to publish.
+async def dispatch(c, owner_id, window):
+    """Move up to ``window - in_flight`` ready chunks of the user's open runs (oldest run first) to queued.
 
-    The per-run in-flight cap interleaves runs of different users in the queue, so a large run never blocks others.
+    The in-flight cap is per user, so one user's large or numerous runs never block other users, while a lone user
+    still gets every worker slot. Returns chunk tasks to publish.
     """
-    await c.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 7))", (run_id,))
+    await c.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 7))", (owner_id,))
     rows = await (await c.execute("""
-        WITH r AS (SELECT owner_id FROM runs WHERE id = %(r)s AND state IN ('receiving', 'sealed')),
-        busy AS (SELECT count(*) AS n FROM chunks WHERE run_id = %(r)s AND state IN ('queued', 'running')),
-        pick AS (SELECT chunk_no FROM chunks WHERE run_id = %(r)s AND state = 'ready' ORDER BY chunk_no
-                 LIMIT greatest(0, %(w)s - (SELECT n FROM busy)) FOR UPDATE SKIP LOCKED)
-        UPDATE chunks c SET state = 'queued', queued_at = now() FROM pick, r
-        WHERE c.run_id = %(r)s AND c.chunk_no = pick.chunk_no
-        RETURNING c.chunk_no, c.input_uri, c.apps, r.owner_id""", {"r": run_id, "w": window})).fetchall()
-    return [{"kind": "chunk", "run_id": str(run_id), "user_id": str(r["owner_id"]), "chunk_no": r["chunk_no"],
+        WITH open AS (SELECT id, created_at FROM runs WHERE owner_id = %(u)s AND state IN ('receiving', 'sealed')),
+        busy AS (SELECT count(*) AS n FROM chunks WHERE run_id IN (SELECT id FROM open)
+                 AND state IN ('queued', 'running')),
+        pick AS (SELECT c.run_id, c.chunk_no FROM chunks c JOIN open o ON o.id = c.run_id WHERE c.state = 'ready'
+                 ORDER BY o.created_at, c.chunk_no
+                 LIMIT greatest(0, %(w)s - (SELECT n FROM busy)) FOR UPDATE OF c SKIP LOCKED)
+        UPDATE chunks c SET state = 'queued', queued_at = now() FROM pick
+        WHERE c.run_id = pick.run_id AND c.chunk_no = pick.chunk_no
+        RETURNING c.run_id, c.chunk_no, c.input_uri, c.apps""", {"u": owner_id, "w": window})).fetchall()
+    return [{"kind": "chunk", "run_id": str(r["run_id"]), "user_id": str(owner_id), "chunk_no": r["chunk_no"],
              "input_uri": r["input_uri"], "apps": r["apps"]} for r in rows]
 
 
@@ -129,7 +132,10 @@ async def complete_chunk(c, run_id, chunk_no, output_uri, stats, stages):
     if row is None:
         return None
     await journal(c, run_id, chunk_no, stages)
-    await c.execute("UPDATE runs SET done_chunks = done_chunks + 1 WHERE id = %s", (run_id,))
+    params = stats.pop("report_params", {})
+    await c.execute("UPDATE runs SET done_chunks = done_chunks + 1, report_params = coalesce(report_params, %s) "
+                    "WHERE id = %s", (Jsonb(params), run_id))
+    await c.execute("UPDATE chunks SET stats = %s WHERE run_id = %s AND chunk_no = %s", (Jsonb(stats), run_id, chunk_no))
     await event(c, run_id, "chunk.done", {"chunk_no": chunk_no, **stats})
     return await flip_finalize(c, run_id)
 

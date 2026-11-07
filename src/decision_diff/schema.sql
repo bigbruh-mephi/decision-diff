@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS runs (
     failed_chunks int NOT NULL DEFAULT 0,
     apps int NOT NULL DEFAULT 0,
     stats jsonb NOT NULL DEFAULT '{}',
+    report_params jsonb,
     error text,
     created_at timestamptz NOT NULL DEFAULT now(),
     sealed_at timestamptz,
@@ -119,3 +120,41 @@ CREATE TABLE IF NOT EXISTS batches (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (run_id, source)
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash bytea PRIMARY KEY,
+    user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+    run_id uuid REFERENCES runs(id) ON DELETE CASCADE,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS shares (
+    token_hash bytea PRIMARY KEY,
+    run_id uuid NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    created_by uuid NOT NULL REFERENCES users(id),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cell_runs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    run_id uuid REFERENCES runs(id) ON DELETE CASCADE,
+    code_sha text NOT NULL REFERENCES code_versions(sha),
+    state text NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'running', 'done', 'failed')),
+    result jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS audit (
+    id bigserial PRIMARY KEY,
+    ts timestamptz NOT NULL DEFAULT now(),
+    user_id uuid,
+    action text NOT NULL,
+    target text,
+    data jsonb NOT NULL DEFAULT '{}'
+);
+
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS report_params jsonb;

@@ -44,13 +44,13 @@ class Worker:
         for t in tasks:
             await queue.publish(self.ch, queue.WORK, t)
 
-    async def dispatch(self, run_id):
+    async def dispatch(self, user_id):
         async with self.pool.connection() as c:
-            tasks = await db.dispatch(c, run_id, settings.run_window)
+            tasks = await db.dispatch(c, user_id, settings.run_window)
         await self.publish_all(tasks)
 
     async def finalize_now(self, run_id, user_id):
-        await queue.publish(self.ch, queue.WORK, {"kind": "finalize", "run_id": run_id, "user_id": user_id})
+        await queue.publish(self.ch, queue.FINALIZE, {"kind": "finalize", "run_id": run_id, "user_id": user_id})
 
     async def on_ingest(self, t):
         run_id = t["run_id"]
@@ -78,7 +78,7 @@ class Worker:
             apps = await self.cpu_trusted(pipeline.cut_chunk, items[k:k + size], uri)
             async with self.pool.connection() as c:
                 await db.add_chunks(c, run_id, [(n, uri, apps)])
-            await self.dispatch(run_id)
+            await self.dispatch(t["user_id"])
         async with self.pool.connection() as c:
             if not done:
                 await db.close_batch(c, run_id, t["source"], -(-len(items) // size))
@@ -104,13 +104,13 @@ class Worker:
                 flip = await db.fail_chunk(c, run_id, no, f"{type(e).__name__}: {e}")
             if flip:
                 await self.finalize_now(run_id, t["user_id"])
-            await self.dispatch(run_id)
+            await self.dispatch(t["user_id"])
             return
         async with self.pool.connection() as c:
             flip = await db.complete_chunk(c, run_id, no, out, stats, stages)
         if flip:
             await self.finalize_now(run_id, t["user_id"])
-        await self.dispatch(run_id)
+        await self.dispatch(t["user_id"])
 
     async def on_finalize(self, t):
         run_id = t["run_id"]
@@ -120,7 +120,8 @@ class Worker:
             if not got["ok"]:
                 return
             try:
-                run = await (await c.execute("SELECT state, procedures FROM runs WHERE id = %s", (run_id,))).fetchone()
+                run = await (await c.execute("SELECT state, procedures, report_params FROM runs WHERE id = %s",
+                                             (run_id,))).fetchone()
                 if not run or run["state"] != "finalizing":
                     return
                 dirs = [r["output_uri"] for r in await (await c.execute(
@@ -133,7 +134,8 @@ class Worker:
                     if not dirs:
                         raise ValueError("no chunk finished successfully")
                     snaps = await self.snapshots(run["procedures"])
-                    stats, stages = await self.cpu_trusted(pipeline.build_run, dirs, str(run_file), snaps)
+                    stats, stages = await self.cpu_trusted(pipeline.build_run, dirs, str(run_file),
+                                                           run["report_params"] or {})
                     checks = await self.cpu(pipeline.run_checks, str(run_file), snaps["checks"])
                 except Exception as e:
                     await c.execute("UPDATE runs SET state = 'failed', error = %s, finished_at = now() WHERE id = %s",
@@ -167,6 +169,41 @@ class Worker:
             out = {k: await full(v, k) for k, v in procs.items() if k != "checks"}
             out["checks"] = [await full(v, "check") for v in procs.get("checks", [])]
             return out
+
+    async def on_check(self, t):
+        """Re-run one check on a finished run (interactive queue); rows join the run's check table."""
+        run_id = t["run_id"]
+        async with self.pool.connection() as c:
+            row = await db.code(c, t["sha"])
+        snap = {"sha": t["sha"], "code": row["code"], "name": row["name"], "params": t.get("params") or {}}
+        res = (await self.cpu(pipeline.run_checks, str(settings.run_dir(run_id) / "run.duckdb"), [snap]))[0]
+        async with self.pool.connection() as c:
+            await c.execute("""
+                INSERT INTO check_results (run_id, check_id, check_sha, label, rows, duration_ms, error)
+                VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (run_id, check_id, check_sha) DO UPDATE
+                SET rows = excluded.rows, duration_ms = excluded.duration_ms, error = excluded.error,
+                    created_at = now()""",
+                            (run_id, res["check_id"], res["sha"], res["label"], Jsonb(res["rows"]), res["duration_ms"],
+                             res["error"]))
+            await db.event(c, run_id, "check.done", {"check_id": res["check_id"], "error": res["error"]})
+
+    async def on_cell(self, t):
+        """Run workspace code in the sandbox; the result is stored for the editor to poll."""
+        async with self.pool.connection() as c:
+            got = await (await c.execute("UPDATE cell_runs SET state = 'running' WHERE id = %s AND state = 'queued' "
+                                         "RETURNING id", (t["exec_id"],))).fetchone()
+            row = await db.code(c, t["sha"])
+        if not got:
+            return
+        run_file = str(settings.run_dir(t["run_id"]) / "run.duckdb") if t.get("run_id") else None
+        try:
+            res = await self.cpu(pipeline.run_cell, row["code"], run_file)
+            state = "failed" if res.get("error") else "done"
+        except Exception as e:
+            res, state = {"error": f"{type(e).__name__}: {e}", "stdout": ""}, "failed"
+        async with self.pool.connection() as c:
+            await c.execute("UPDATE cell_runs SET state = %s, result = %s, finished_at = now() WHERE id = %s",
+                            (state, Jsonb(res), t["exec_id"]))
 
     async def on_dead(self, t):
         if t.get("kind") == "chunk":
@@ -245,7 +282,7 @@ async def main(queues, procs):
 
 def cli():
     ap = argparse.ArgumentParser(prog="dd-worker")
-    ap.add_argument("--queues", default=queue.WORK)
+    ap.add_argument("--queues", default=f"{queue.WORK},{queue.FINALIZE},{queue.INTERACTIVE}")
     ap.add_argument("--procs", type=int, default=settings.worker_procs)
     a = ap.parse_args()
     asyncio.run(main(a.queues.split(","), a.procs))

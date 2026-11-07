@@ -53,6 +53,8 @@ def build(chunk_dirs, out_path, segments_params=None, facts_max_values=200, thre
         _facts(con, facts_max_values)
         _segment_bitmaps(con, multi)
         _structure(con)
+        _clusters(con)
+        _transitions(con)
         stats = dict(zip(("apps", "mart_rows", "comparison_rows", "changed_apps"), con.execute("""
             SELECT (SELECT count(*) FROM apps), (SELECT count(*) FROM mart),
                    (SELECT count(*) FROM (SELECT DISTINCT app_ord, path_id, ARRAY_KEY FROM mart)),
@@ -126,3 +128,36 @@ def _structure(con):
         FROM mart m JOIN attrs t USING (path_id)
         GROUP BY ALL
         HAVING apps_new + apps_lost + apps_type_changed > 0""")
+
+
+def _clusters(con):
+    """Change clusters: applications sharing the same set of changed paths (generic, no domain knowledge)."""
+    rows = con.execute("""
+        WITH sig AS (SELECT app_ord, list(DISTINCT path_id ORDER BY path_id) AS paths
+                     FROM mart WHERE DIFF_FLAG = 1 GROUP BY app_ord)
+        SELECT paths, list(app_ord ORDER BY app_ord) FROM sig GROUP BY paths
+        ORDER BY count(*) DESC, paths""").fetchall()
+    con.execute("CREATE TABLE clusters (cid UINTEGER, paths UINTEGER[], CNT UINTEGER, APPS BLOB)")
+    if rows:
+        _insert(con, "clusters", ("cid", "paths", "CNT", "APPS"), [(i + 1, r[0], r[1]) for i, r in enumerate(rows)])
+
+
+def _transitions(con, top=20):
+    """Value transitions per path (BEFORE -> AFTER over changed keys), top ``top`` per path plus one ``(other)``."""
+    rows = con.execute(f"""
+        WITH k AS (
+            SELECT app_ord, path_id,
+                   coalesce(max(VALUE) FILTER (WHERE SOURCE = 'BEFORE'), '∅') AS vb,
+                   coalesce(max(VALUE) FILTER (WHERE SOURCE = 'AFTER'), '∅') AS va
+            FROM mart WHERE DIFF_FLAG = 1 GROUP BY app_ord, path_id, ARRAY_KEY),
+        t AS (SELECT path_id, vb, va, list(DISTINCT app_ord ORDER BY app_ord) AS apps,
+                     row_number() OVER (PARTITION BY path_id ORDER BY count(DISTINCT app_ord) DESC, vb, va) AS rk
+              FROM k GROUP BY path_id, vb, va)
+        SELECT path_id, vb, va, apps FROM t WHERE rk <= {int(top)}
+        UNION ALL
+        SELECT path_id, '(other)', '(other)', list(DISTINCT a ORDER BY a)
+        FROM (SELECT path_id, unnest(apps) AS a FROM t WHERE rk > {int(top)}) GROUP BY path_id""").fetchall()
+    con.execute("CREATE TABLE transitions (path_id UINTEGER, VALUE_BEFORE VARCHAR, VALUE_AFTER VARCHAR, CNT UINTEGER, "
+                "APPS BLOB)")
+    if rows:
+        _insert(con, "transitions", ("path_id", "VALUE_BEFORE", "VALUE_AFTER", "CNT", "APPS"), rows)

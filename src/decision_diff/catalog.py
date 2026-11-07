@@ -1,4 +1,7 @@
-"""Procedure catalog: placed ``.py`` files and workspace code registered in PostgreSQL, run snapshots."""
+"""Procedure catalog: placed ``.py`` files and workspace code registered in PostgreSQL, run snapshots.
+
+Registration only inspects source (AST); user code is executed exclusively inside the worker sandbox.
+"""
 
 from pathlib import Path
 
@@ -11,7 +14,7 @@ async def sync_files(c, root, owner_id=None):
     ids = {}
     for f in sorted(Path(root).rglob("*.py")):
         code = f.read_text(encoding="utf-8")
-        spec = procedures.load(code, str(f))
+        spec = procedures.inspect_source(code, str(f))
         name = str(f.relative_to(root))
         await db.store_code(c, spec["kind"], name, code, spec["sha"])
         row = await (await c.execute("""
@@ -27,7 +30,7 @@ async def sync_files(c, root, owner_id=None):
 
 async def save_workspace(c, owner_id, code, proc_id=None):
     """Create or update a workspace procedure from code; validation errors raise ProcedureError."""
-    spec = procedures.load(code, "<workspace>")
+    spec = procedures.inspect_source(code)
     await db.store_code(c, spec["kind"], spec["id"], code, spec["sha"])
     if proc_id:
         row = await (await c.execute("""

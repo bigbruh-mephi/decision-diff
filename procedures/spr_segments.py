@@ -43,6 +43,8 @@ PROCEDURE = {
     "label": "SPR responses: segments layer (decision, products, target model, cut-off, external score)",
     "kind": "segments",
     "params": {"multi_valued": {"PRODUCTS": ";", "PARTNER_TYPE": ";", "ROUTING_METHOD": ";"},
-               "decision_field": "DECISION"},
+               "decision_field": "DECISION",
+               "positive_decision": "APPROVE",
+               "input_paths": ["characteristics.**", "ext_data.**", "appData.**"]},
     "entrypoint": run,
 }

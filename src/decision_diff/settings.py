@@ -17,7 +17,7 @@ class Settings:
     datasets_dir: Path = field(default_factory=lambda: Path(_env("DD_DATASETS_DIR", "./datasets")))
     procedures_dir: Path = field(default_factory=lambda: Path(_env("DD_PROCEDURES_DIR", "./procedures")))
     chunk_apps: int = field(default_factory=lambda: int(_env("DD_CHUNK_APPS", "250")))
-    run_window: int = field(default_factory=lambda: int(_env("DD_RUN_WINDOW", "4")))
+    run_window: int = field(default_factory=lambda: int(_env("DD_USER_WINDOW", _env("DD_WORKER_PROCS", "4"))))
     worker_procs: int = field(default_factory=lambda: int(_env("DD_WORKER_PROCS", "4")))
     delivery_limit: int = field(default_factory=lambda: int(_env("DD_DELIVERY_LIMIT", "5")))
     sandbox: str = field(default_factory=lambda: _env("DD_SANDBOX", "strict"))

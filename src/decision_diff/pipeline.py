@@ -71,14 +71,13 @@ def _chunk_body(input_uri, out_dir, snaps):
               _stage("compare", c["sha"], a, b, m.num_rows, m.num_rows),
               _stage("segments", s["sha"], b, b + t["segments"], len(apps), sg.num_rows),
               _stage("write", None, t2, t3, rows_out=m.num_rows)]
-    return stats, stages
+    return {**stats, "report_params": s["params"]}, stages
 
 
-def build_run(chunk_dirs, run_file, snaps):
+def build_run(chunk_dirs, run_file, report_params):
     """Build the run file (trusted code, no user procedure runs here); returns ``(stats, stages)``."""
-    seg = procedures.load(snaps["segments"]["code"], snaps["segments"]["name"], "segments")
     t0 = time.time()
-    stats = finalize.build(chunk_dirs, run_file, {**seg["params"], **(snaps["segments"].get("params") or {})})
+    stats = finalize.build(chunk_dirs, run_file, report_params)
     return stats, [_stage("finalize", None, t0, time.time(), len(chunk_dirs), stats["mart_rows"])]
 
 
@@ -106,3 +105,55 @@ def _check_body(run_file, snap):
         return chk["id"], chk["label"], rows
     finally:
         con.close()
+
+
+def run_cell(code, run_file):
+    """Execute workspace code in the sandbox with ``mart`` bound to the run; returns stdout, last value, check rows."""
+    read = [run_file] if run_file else []
+    return confined(_cell_body, (code, run_file), read=read)
+
+
+def _cell_body(code, run_file):
+    import ast
+    import contextlib
+    import io
+
+    out, con = io.StringIO(), None
+    env = {"__name__": "__cell__"}
+    if run_file:
+        con = mart.open_run(run_file, threads=1)
+        env["mart"] = mart.Mart(con)
+    res = {"stdout": "", "value": None, "check": None, "error": None}
+    try:
+        tree = ast.parse(code, "cell")
+        last = tree.body.pop() if tree.body and isinstance(tree.body[-1], ast.Expr) else None
+        with contextlib.redirect_stdout(out):
+            exec(compile(tree, "cell", "exec"), env)
+            if last is not None:
+                res["value"] = _preview(eval(compile(ast.Expression(last.value), "cell", "eval"), env))
+            chk = env.get("CHECK")
+            if isinstance(chk, dict) and callable(chk.get("entrypoint")) and "mart" in env:
+                rows = chk["entrypoint"](env["mart"], chk.get("params", {}))
+                res["check"] = {"id": chk.get("id"), "label": chk.get("label"),
+                                "rows": procedures.validate_check_rows(chk.get("id", "cell"), rows)}
+    except Exception as e:
+        import traceback
+
+        res["error"] = f"{type(e).__name__}: {e}"
+        res["traceback"] = [f for f in traceback.format_exc().splitlines() if "cell" in f or not f.startswith("  File")]
+    finally:
+        if con:
+            con.close()
+    res["stdout"] = out.getvalue()[-200_000:]
+    return res
+
+
+def _preview(v):
+    if isinstance(v, (str, int, float, bool)) or v is None:
+        return {"type": "scalar", "repr": repr(v)}
+    if hasattr(v, "__iter__") and not isinstance(v, (dict, bytes)):
+        items = list(v)[:201]
+        if items and all(isinstance(x, dict) for x in items):
+            return {"type": "table", "rows": items[:200], "more": len(items) > 200}
+        return {"type": "list", "repr": repr(items[:200])[:20_000]}
+    return {"type": "scalar", "repr": repr(v)[:20_000]}

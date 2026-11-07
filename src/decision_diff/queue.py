@@ -5,7 +5,7 @@ import orjson
 
 from .settings import settings
 
-WORK, INTERACTIVE, DLX, DEAD = "dd.work", "dd.interactive", "dd.dlx", "dd.dead"
+WORK, FINALIZE, INTERACTIVE, DLX, DEAD = "dd.work", "dd.finalize", "dd.interactive", "dd.dlx", "dd.dead"
 PRIORITY = {"ingest": 2, "chunk": 2, "finalize": 6, "cell": 6, "check": 6}
 
 
@@ -23,6 +23,7 @@ async def connect():
     dead = await ch.declare_queue(DEAD, durable=True, arguments={"x-queue-type": "quorum"})
     await dead.bind(dlx)
     await ch.declare_queue(WORK, durable=True, arguments=_queue_args(settings.delivery_limit))
+    await ch.declare_queue(FINALIZE, durable=True, arguments=_queue_args(settings.delivery_limit))
     await ch.declare_queue(INTERACTIVE, durable=True, arguments=_queue_args(1))
     return conn, ch
 
