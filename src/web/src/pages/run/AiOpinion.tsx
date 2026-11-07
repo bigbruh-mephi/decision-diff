@@ -28,7 +28,7 @@ export function AiOpinion({ runId }: { runId: string }) {
       />
       {ai.isLoading && <Skeleton rows={3} />}
       {ai.error && <Empty title="Мнение ИИ недоступно">{ai.error instanceof Error ? ai.error.message : String(ai.error)}</Empty>}
-      {d?.state === "disabled" && <Empty title="Языковая модель не подключена">Укажите DD_LLM_BASE_URL, DD_LLM_API_KEY и DD_LLM_MODEL (любой OpenAI-совместимый endpoint).</Empty>}
+      {d?.state === "disabled" && <Empty title="Языковая модель не подключена">Укажите DD_LLM_BASE_URL, DD_LLM_API_KEY и DD_LLM_MODEL (подойдёт любой сервис, совместимый с API OpenAI).</Empty>}
       {d?.state === "pending" && <Empty title="Модель анализирует прогон…">Отчёт уже доступен, мнение появится здесь.</Empty>}
       {d?.state === "failed" && <Empty title="Не удалось получить мнение">{d.error}</Empty>}
       {d?.state === "done" && (
@@ -36,7 +36,7 @@ export function AiOpinion({ runId }: { runId: string }) {
           {(d.findings ?? []).map((f, i) => (
             <li key={i} className="px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={f.severity === "high" ? "fail" : f.severity === "medium" ? "warn" : "neutral"}>{f.severity}</Badge>
+                <Badge tone={f.severity === "high" ? "fail" : f.severity === "medium" ? "warn" : "neutral"}>{f.severity === "high" ? "высокая" : f.severity === "medium" ? "средняя" : "низкая"}</Badge>
                 <span className="font-medium">{f.title}</span>
                 {f.verified ? <Badge tone="pass">числа сверены</Badge> : <Badge tone="low">не проверено</Badge>}
               </div>

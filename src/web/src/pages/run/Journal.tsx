@@ -1,17 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { CodeView } from "../../components/CodeView";
-import { Badge, Button, Card, CardHeader, ErrorBox, Mono, Skeleton } from "../../components/ui";
+import { Badge, Button, Card, CardHeader, ErrorBox, Skeleton } from "../../components/ui";
 import { api, type Journal } from "../../lib/api";
-import { dt, ms, n } from "../../lib/format";
+import { EVENT, dt, ms, n } from "../../lib/format";
 
 const STAGE: Record<string, string> = {
   parse: "Разбор ответов (формат → дерево)",
   normalize: "Приведение к плоской витрине",
   compare: "Сопоставление BEFORE / AFTER",
   segments: "Слой разрезов",
-  write: "Запись порции (Parquet)",
-  finalize: "Сборка витрины, фактов counts и битмапов",
+  write: "Запись порции",
+  finalize: "Сборка витрины и фактов",
+  checks: "Автопроверки",
 };
 
 function CodeModal({ sha, onClose }: { sha: string; onClose: () => void }) {
@@ -65,7 +66,6 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                   <tr key={s.stage + s.code_sha} className="border-b border-line last:border-0">
                     <td className="px-4 py-2">
                       <div className="font-medium">{STAGE[s.stage] ?? s.stage}</div>
-                      <Mono className="text-muted">{s.stage}</Mono>
                       {s.error && <div className="text-xs text-fail">{s.error}</div>}
                     </td>
                     <td className="num px-2 py-2">
@@ -97,7 +97,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                 {chunks.map((c) => (
                   <tr key={c.chunk_no} className="border-b border-line">
                     <td className="num px-4 py-1">#{c.chunk_no}</td>
-                    <td className="px-2 py-1"><Badge tone={c.state === "done" ? "pass" : c.state === "failed" ? "fail" : "accent"}>{c.state}</Badge></td>
+                    <td className="px-2 py-1"><Badge tone={c.state === "done" ? "pass" : c.state === "failed" ? "fail" : "accent"}>{c.state === "done" ? "готово" : c.state === "failed" ? "ошибка" : "в работе"}</Badge></td>
                     <td className="num px-2 py-1">{n(c.apps)} заявок</td>
                     <td className="num px-2 py-1">{c.attempts > 1 ? <Badge tone="warn">попыток {c.attempts}</Badge> : `попыток ${c.attempts}`}</td>
                     <td className="px-2 py-1 text-muted">{c.worker}</td>
@@ -114,8 +114,8 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
             {events.map((e) => (
               <li key={e.id} className="flex gap-2 border-b border-line px-4 py-1">
                 <span className="text-muted">{dt(e.ts)}</span>
-                <span className="text-accent">{e.type}</span>
-                <span className="truncate text-muted">{JSON.stringify(e.data)}</span>
+                <span className="text-accent">{EVENT[e.type] ?? e.type}</span>
+                <span className="truncate text-muted">{e.data?.error ? String(e.data.error) : ""}</span>
               </li>
             ))}
           </ul>

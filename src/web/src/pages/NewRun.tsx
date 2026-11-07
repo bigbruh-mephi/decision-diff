@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Button, Card, CardHeader, ErrorBox, Field, Skeleton, inputCls } from "../components/ui";
+import { Badge, Button, Card, CardHeader, ErrorBox, Field, Skeleton, inputCls, titleCls } from "../components/ui";
 import { api, type Config, type Dataset, type Procedure, type Run, type Selection } from "../lib/api";
 import { n } from "../lib/format";
 
@@ -47,6 +47,8 @@ export function NewRunPage() {
   const [sel, setSel] = useState<Selection | null>(null);
   const [configId, setConfigId] = useState<string>("");
   const [incremental, setIncremental] = useState(false);
+  const [sample, setSample] = useState("");
+  const params = { sample_apps: sample ? Number(sample) : null };
 
   useEffect(() => {
     if (!sel && procs.data)
@@ -69,6 +71,7 @@ export function NewRunPage() {
       setSel(c.procedure_ids);
       if (c.dataset) setDataset(c.dataset);
       setName(c.name);
+      setSample(c.params?.sample_apps ? String(c.params.sample_apps) : "");
     }
   };
 
@@ -86,15 +89,15 @@ export function NewRunPage() {
   const saveConfig = useMutation({
     mutationFn: () =>
       configId
-        ? api.put<Config>(`/api/configs/${configId}`, { name: name || dataset, dataset, procedures: sel })
-        : api.post<Config>("/api/configs", { name: name || dataset, dataset, procedures: sel }),
+        ? api.put<Config>(`/api/configs/${configId}`, { name: name || dataset, dataset, procedures: sel, params })
+        : api.post<Config>("/api/configs", { name: name || dataset, dataset, procedures: sel, params }),
     onSuccess: (c) => {
       setConfigId(c.id);
       qc.invalidateQueries({ queryKey: ["configs"] });
     },
   });
   const start = useMutation({
-    mutationFn: () => api.post<Run>("/api/runs", { name: name || undefined, dataset, procedures: sel, config_id: configId || undefined, seal: !incremental }),
+    mutationFn: () => api.post<Run>("/api/runs", { name: name || undefined, dataset, procedures: sel, config_id: configId || undefined, seal: !incremental, params }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["runs"] });
       nav({ to: "/runs/$runId", params: { runId: r.id }, search: {} });
@@ -106,7 +109,7 @@ export function NewRunPage() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-4">
       <div>
-        <h1 className="text-lg font-semibold">Новый прогон</h1>
+        <h1 className={titleCls}>Новый прогон</h1>
         <p className="text-xs text-muted">Выберите датасет, процедуры приведения и сравнения и набор автопроверок. Конфигурацию можно сохранить и запускать повторно.</p>
       </div>
       {configs.data && configs.data.length > 0 && (
@@ -134,10 +137,24 @@ export function NewRunPage() {
             </select>
           </Field>
           <Field label="или загрузить архив">
-            <label className="inline-flex h-8 cursor-pointer items-center rounded-md border border-dashed border-line-strong px-3 text-[13px] text-muted hover:border-accent hover:text-fg">
+            <label className="inline-flex h-9 cursor-pointer items-center rounded-md border border-dashed border-line-strong px-3 text-[13px] text-muted hover:border-accent hover:text-fg">
               {upload.isPending ? "Загрузка…" : "Выбрать .zip"}
               <input type="file" accept=".zip" className="sr-only" onChange={(e) => e.target.files?.[0] && upload.mutate(e.target.files[0])} />
             </label>
+          </Field>
+          <Field label="Заявок в выборке" hint="Случайные заявки. Одно и то же число даёт те же заявки, поэтому прогоны можно сравнивать между собой">
+            <input
+              type="number"
+              min={1}
+              max={ds?.before}
+              className={inputCls + " w-40"}
+              value={sample}
+              onChange={(e) => {
+                setSample(e.target.value);
+                if (e.target.value) setIncremental(false);
+              }}
+              placeholder={ds ? `все (${n(ds.before)})` : "все"}
+            />
           </Field>
           {ds && (
             <p className="text-xs text-muted sm:col-span-2">
@@ -158,7 +175,7 @@ export function NewRunPage() {
               </Field>
             ))}
             {(byKind.lineage ?? []).length > 0 && (
-              <Field label="Цепочка этапов (lineage)" hint="Вход → признаки → скоры → порог → правила → решение: для атрибуции «логика или входные данные»">
+              <Field label="Цепочка этапов" hint="Вход → признаки → скоры → порог → правила → решение: для атрибуции «логика или входные данные»">
                 <ProcSelect items={byKind.lineage ?? []} value={sel.lineage ?? ""} onChange={(v) => setSel({ ...sel, lineage: v })} />
               </Field>
             )}
@@ -177,7 +194,7 @@ export function NewRunPage() {
           />
           <div className="grid gap-1 p-4 sm:grid-cols-2">
             {(byKind.check ?? []).map((p) => (
-              <label key={p.id} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-surface-2">
+              <label key={p.id} className="flex min-w-0 items-center gap-2 rounded px-2 py-1 hover:bg-surface-2">
                 <input
                   type="checkbox"
                   checked={sel.checks.includes(p.id)}
@@ -195,8 +212,8 @@ export function NewRunPage() {
           <Field label="Название прогона">
             <input className={inputCls + " w-72"} value={name} onChange={(e) => setName(e.target.value)} placeholder={dataset} />
           </Field>
-          <label className="flex h-8 items-center gap-2 text-xs text-muted" title="Прогон остаётся открытым: можно догружать новые порции ответов, обработка начинается сразу">
-            <input type="checkbox" checked={incremental} onChange={(e) => setIncremental(e.target.checked)} />
+          <label className="flex h-9 items-center gap-2 text-xs text-muted" title="Прогон остаётся открытым: можно догружать новые порции ответов, обработка начинается сразу">
+            <input type="checkbox" checked={incremental} disabled={!!sample} onChange={(e) => setIncremental(e.target.checked)} />
             принимать догрузку порций
           </label>
           <div className="ml-auto flex gap-2">

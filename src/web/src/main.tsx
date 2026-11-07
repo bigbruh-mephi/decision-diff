@@ -11,7 +11,7 @@ import {
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
-import { Button, Skeleton } from "./components/ui";
+import { Button, Logo, Skeleton } from "./components/ui";
 import { ApiError, api, type Me } from "./lib/api";
 import { AppDetailPage } from "./pages/AppDetail";
 import { LoginPage } from "./pages/Login";
@@ -25,7 +25,7 @@ const queryClient = new QueryClient({
 });
 
 function useTheme() {
-  const [theme, setTheme] = useState<string>(() => localStorage.getItem("theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  const [theme, setTheme] = useState<string>(() => localStorage.getItem("theme") ?? "light");
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
@@ -46,24 +46,23 @@ function Shell() {
   const shareOnly = !me.data?.user_id;
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
-        <div className="mx-auto flex h-12 max-w-[1440px] items-center gap-4 px-4">
-          <Link to="/" className="flex items-center gap-2 font-semibold">
-            <span aria-hidden className="grid h-6 w-6 place-items-center rounded bg-accent font-mono text-[11px] text-white">Δ</span>
-            Decision Diff
+      <header className="sticky top-0 z-30 bg-surface/95 backdrop-blur">
+        <div className="mx-auto flex min-h-16 max-w-[1440px] flex-wrap items-center gap-x-8 gap-y-1 px-4 py-2 sm:px-6">
+          <Link to="/" aria-label="Decision Diff" className="flex items-center">
+            <Logo />
           </Link>
           {!shareOnly && (
-            <nav className="flex items-center gap-1 text-[13px]">
-              <Link to="/" className="rounded px-2 py-1 text-muted hover:text-fg [&.active]:text-fg" activeOptions={{ exact: true }}>
+            <nav className="order-last -ml-3 flex w-full items-center gap-1 whitespace-nowrap text-[13px] sm:order-none sm:ml-0 sm:w-auto">
+              <Link to="/" className="rounded-md px-3 py-1.5 text-muted hover:text-accent [&.active]:bg-surface-2 [&.active]:text-fg" activeOptions={{ exact: true }}>
                 Прогоны
               </Link>
-              <Link to="/workspace" className="rounded px-2 py-1 text-muted hover:text-fg [&.active]:text-fg">
+              <Link to="/workspace" className="rounded-md px-3 py-1.5 text-muted hover:text-accent [&.active]:bg-surface-2 [&.active]:text-fg">
                 Рабочая область
               </Link>
             </nav>
           )}
           <div className="ml-auto flex items-center gap-2 text-xs text-muted">
-            <Button variant="ghost" size="sm" onClick={toggle} aria-label="Переключить тему">
+            <Button variant="ghost" size="sm" className="text-base" onClick={toggle} aria-label="Переключить тему">
               {theme === "dark" ? "☀" : "☾"}
             </Button>
             <span>{shareOnly ? "просмотр по ссылке" : me.data?.login}</span>
@@ -84,7 +83,7 @@ function Shell() {
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1440px] px-4 py-4">
+      <main className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6">
         <Outlet />
       </main>
     </div>

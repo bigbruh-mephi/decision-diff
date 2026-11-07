@@ -140,9 +140,9 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
       <div className="flex min-w-0 flex-col gap-4">
         {err && <ErrorBox error={err} />}
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-busy={busy}>
-          <Stat label="Approval rate BEFORE" value={r ? rate(r.approval_rate.before) : "…"} />
-          <Stat label="Approval rate AFTER" value={r ? rate(r.approval_rate.after) : "…"} />
-          <Stat label="Approval rate «что если»" value={r ? rate(r.approval_rate.whatif) : "…"} tone="accent" sub={r ? `${((r.approval_rate.whatif - r.approval_rate.after) * 100).toFixed(1).replace(".", ",")} п.п. к AFTER` : undefined} />
+          <Stat label="Доля одобрений BEFORE" value={r ? rate(r.approval_rate.before) : "…"} />
+          <Stat label="Доля одобрений AFTER" value={r ? rate(r.approval_rate.after) : "…"} />
+          <Stat label="Доля одобрений «что если»" value={r ? rate(r.approval_rate.whatif) : "…"} tone="accent" sub={r ? `${((r.approval_rate.whatif - r.approval_rate.after) * 100).toFixed(1).replace(".", ",")} п.п. к AFTER` : undefined} />
           <Stat label={`Решение изменится относительно ${r?.slice ?? "среза"}`} value={r ? n(r.moved) : "…"} sub={r ? pct(r.moved, r.apps) : undefined} tone="warn" />
         </section>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">

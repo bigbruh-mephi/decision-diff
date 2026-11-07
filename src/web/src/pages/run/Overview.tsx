@@ -70,7 +70,7 @@ function ClusterTable({ clusters, total, onOpen, onTransition }: { clusters: Clu
               <td className="px-4 py-2">
                 {c.cid ? (
                   <button onClick={() => onOpen(c.cid!)} className="font-medium text-accent hover:underline">
-                    №{c.cid} · {c.paths?.length} атрибутов
+                    <span className="whitespace-nowrap">№{c.cid} · {c.paths?.length} атрибутов</span>
                   </button>
                 ) : (
                   <span className="text-muted">ещё {c.clusters} кластеров</span>
@@ -211,7 +211,7 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
         <Stat label="С различиями" value={n(s.changed)} sub={pct(s.changed, s.apps)} tone="accent" onClick={() => go(scope, "apps", { filters: { DIFF_FLAG: ["1"] }, title: "заявки с различиями" })} />
         <Stat label="Сменилось решение" value={n(s.decision_changed)} sub={pct(s.decision_changed, s.apps)} tone="fail" onClick={() => go({ ...scope, seg: { ...scope.seg, [`${s.decision_field}_CHANGED`]: ["1"] } }, "apps")} />
         <Stat label="Различия есть, решение то же" value={n(s.changed_same_decision)} sub={`${pct(s.changed_same_decision, s.changed)} изменений прошли мимо`} />
-        <Stat label="Approval rate" value={s.approval_before == null ? "—" : `${rate(s.approval_before)} → ${rate(s.approval_after)}`} sub={s.approval_before != null && s.approval_after != null ? `${((s.approval_after - s.approval_before) * 100).toFixed(1).replace(".", ",")} п.п.` : undefined} tone={s.approval_after != null && s.approval_before != null && s.approval_after < s.approval_before ? "fail" : undefined} />
+        <Stat label="Доля одобрений" value={s.approval_before == null ? "—" : `${rate(s.approval_before)} → ${rate(s.approval_after)}`} sub={s.approval_before != null && s.approval_after != null ? `${((s.approval_after - s.approval_before) * 100).toFixed(1).replace(".", ",")} п.п.` : undefined} tone={s.approval_after != null && s.approval_before != null && s.approval_after < s.approval_before ? "fail" : undefined} />
         <Stat label="Из-за входных данных" value={n(s.input_driven)} sub="не логика стратегии: возможна ложная тревога" tone={s.input_driven ? "warn" : undefined} onClick={s.input_driven ? () => { const c = s.clusters.find((x) => x.origin === "input"); if (c?.cid) go({ ...scope, cluster: c.cid }); } : undefined} />
       </section>
       <div className="rounded-lg border border-line bg-surface px-4 py-3 text-[13px] leading-relaxed">
@@ -220,7 +220,7 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
         {s.swap.filter((x) => x.before !== x.after).map((x) => ` (${x.before}→${x.after}: ${n(x.apps)})`).join(",")}.
         {top.length > 0 && <> Главные причины: {top.map((c, i) => <span key={c.cid}>{i ? "; " : ""}кластер №{c.cid} — {c.transitions?.[0] ? <Mono>{tail(c.transitions[0].path!)}</Mono> : null} {c.transitions?.[0] ? `${c.transitions[0].before}→${c.transitions[0].after}` : ""} ({n(c.apps)} заявок{c.origin === "input" ? ", входные данные" : ""})</span>)}.</>}
         {s.changed_same_decision > 0 && <> У {n(s.changed_same_decision)} заявок различия не повлияли на решение.</>}
-        {" "}Проверки: <Badge tone={failHigh ? "fail" : "pass"}>FAIL {failHigh}</Badge> <Badge tone="low">FAIL low {failLow}</Badge> <Badge tone="pass">PASS {rows.length - failHigh - failLow}</Badge>
+        {" "}Проверки: <Badge tone={failHigh ? "fail" : "pass"}>FAIL {failHigh}</Badge> <Badge tone="low">FAIL бледных {failLow}</Badge> <Badge tone="pass">PASS {rows.length - failHigh - failLow}</Badge>
         {errors > 0 && <Badge tone="fail">ошибок исполнения: {errors}</Badge>}
       </div>
       <div className="grid gap-4 xl:grid-cols-[1fr_2fr]">

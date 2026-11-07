@@ -156,7 +156,7 @@ export function WorkspacePage() {
             <h1 className="text-[13px] font-semibold">{current ? current.name : "Новая процедура"}</h1>
             {current && <Badge>{current.origin === "file" ? `файл ${current.path}` : "рабочая область"}</Badge>}
             {current && <Mono className="text-muted">версия {current.sha.slice(0, 7)}</Mono>}
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex flex-wrap items-center gap-2">
               <select className={inputCls + " h-7 text-xs"} value={runId} onChange={(e) => setRunId(e.target.value)} aria-label="Прогон для запуска">
                 <option value="">без прогона</option>
                 {done.map((r) => (

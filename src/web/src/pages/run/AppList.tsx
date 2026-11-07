@@ -32,6 +32,8 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
       {q.data && !rows.length && <Empty title="Нет заявок в этом отборе" />}
       {rows.length > 0 && (
         <>
+          <div className="overflow-x-auto">
+          <div className="min-w-[640px]">
           <div className="grid grid-cols-[1fr_7rem_7rem_8rem_6rem] border-b border-line px-4 py-2 text-xs font-medium text-muted">
             <span>Заявка</span>
             <span>BEFORE</span>
@@ -61,6 +63,8 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
                 );
               })}
             </div>
+          </div>
+          </div>
           </div>
           {q.data && q.data.total > rows.length && (
             <button className="w-full border-t border-line py-2 text-xs text-accent hover:bg-surface-2" onClick={() => setPages(pages + 1)} disabled={rows.length >= 1000}>

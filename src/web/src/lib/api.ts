@@ -19,7 +19,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     let msg = res.statusText;
     try {
       const j = await res.json();
-      msg = typeof j.detail === "string" ? j.detail : j.error ?? JSON.stringify(j.detail ?? j);
+      msg = typeof j.detail === "string" ? j.detail : j.error ?? "Проверьте введённые данные";
     } catch {
       /* not JSON */
     }

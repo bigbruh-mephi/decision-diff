@@ -32,3 +32,19 @@ export const tail = (path: string, k = 3) => {
   const parts = path.split(".");
   return parts.length > k ? "…" + parts.slice(-k).join(".") : path;
 };
+
+export const EVENT: Record<string, string> = {
+  "run.created": "прогон создан",
+  "run.sealed": "приём ответов завершён",
+  "run.done": "прогон завершён",
+  "run.failed": "прогон завершился ошибкой",
+  "run.cancelled": "прогон отменён",
+  "ingest.started": "приём ответов начат",
+  "ingest.done": "ответы приняты",
+  "chunk.done": "порция обработана",
+  "chunk.failed": "ошибка порции",
+  "finalize.started": "сборка витрины",
+  "check.queued": "проверка в очереди",
+  "check.done": "проверка выполнена",
+  "ai.done": "мнение ИИ получено",
+};

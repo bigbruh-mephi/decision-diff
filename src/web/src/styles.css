@@ -1,60 +1,66 @@
 @import "tailwindcss";
-@import "@fontsource-variable/inter";
+@import "@fontsource-variable/manrope";
+@import "@fontsource-variable/montserrat";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 :root {
-  --bg: oklch(0.985 0.002 250);
-  --surface: oklch(1 0 0);
-  --surface-2: oklch(0.97 0.004 250);
-  --fg: oklch(0.21 0.015 255);
-  --muted: oklch(0.52 0.015 255);
-  --line: oklch(0.91 0.006 255);
-  --line-strong: oklch(0.84 0.01 255);
-  --accent: oklch(0.52 0.16 258);
-  --accent-bg: oklch(0.95 0.03 258);
-  --fail: oklch(0.55 0.2 27);
-  --fail-bg: oklch(0.96 0.03 27);
-  --fail-low: oklch(0.55 0.05 27);
-  --fail-low-bg: oklch(0.975 0.012 27);
-  --pass: oklch(0.52 0.11 152);
-  --pass-bg: oklch(0.96 0.03 152);
-  --warn: oklch(0.62 0.13 75);
-  --warn-bg: oklch(0.96 0.04 85);
-  --before: oklch(0.5 0.03 250);
-  --after: oklch(0.52 0.15 250);
-  --ct-changed: oklch(0.52 0.17 300);
-  --ct-new: oklch(0.55 0.11 190);
-  --ct-lost: oklch(0.62 0.14 65);
-  --ct-same: oklch(0.62 0.01 255);
+  --bg: #f8f4f0;
+  --surface: #ffffff;
+  --surface-2: #f8f4f0;
+  --fg: #0f0f0f;
+  --muted: #6b6560;
+  --line: #eee9e3;
+  --line-strong: #dcd5cd;
+  /* --brand is the site's exact orange; on white it is only 3.2:1, so text and text-bearing fills use --accent */
+  --brand: #ff5028;
+  --accent: #d93a14;
+  --on-accent: #ffffff;
+  --accent-bg: #fff0ea;
+  --fail: #ad1242;
+  --fail-bg: #fdebf0;
+  --fail-low: #8c5a68;
+  --fail-low-bg: #faf3f5;
+  --pass: #1f7a4d;
+  --pass-bg: #e8f5ee;
+  --warn: #8f6200;
+  --warn-bg: #fbf3dc;
+  --before: #6b6560;
+  --after: #d93a14;
+  --ct-changed: #7a3fb5;
+  --ct-new: #0d7f86;
+  --ct-lost: #b57a00;
+  --ct-same: #9a948e;
 }
 
 [data-theme="dark"] {
-  --bg: oklch(0.17 0.01 255);
-  --surface: oklch(0.205 0.012 255);
-  --surface-2: oklch(0.235 0.013 255);
-  --fg: oklch(0.93 0.008 255);
-  --muted: oklch(0.68 0.015 255);
-  --line: oklch(0.29 0.013 255);
-  --line-strong: oklch(0.36 0.015 255);
-  --accent: oklch(0.72 0.13 258);
-  --accent-bg: oklch(0.28 0.05 258);
-  --fail: oklch(0.7 0.18 27);
-  --fail-bg: oklch(0.27 0.06 27);
-  --fail-low: oklch(0.68 0.05 27);
-  --fail-low-bg: oklch(0.23 0.02 27);
-  --pass: oklch(0.72 0.12 152);
-  --pass-bg: oklch(0.26 0.04 152);
-  --warn: oklch(0.78 0.13 80);
-  --warn-bg: oklch(0.28 0.05 80);
-  --before: oklch(0.7 0.03 250);
-  --after: oklch(0.74 0.12 250);
-  --ct-changed: oklch(0.72 0.14 300);
-  --ct-new: oklch(0.74 0.1 190);
-  --ct-lost: oklch(0.78 0.12 70);
-  --ct-same: oklch(0.6 0.01 255);
+  --bg: #151210;
+  --surface: #1f1b18;
+  --surface-2: #2a2521;
+  --fg: #f5f1ed;
+  --muted: #a89f97;
+  --line: #2f2925;
+  --line-strong: #453d37;
+  --brand: #ff5028;
+  --accent: #ff8562;
+  --on-accent: #1a0f0a;
+  --accent-bg: #3a2018;
+  --fail: #ff7a9c;
+  --fail-bg: #3b1722;
+  --fail-low: #c59aa6;
+  --fail-low-bg: #2a1f22;
+  --pass: #6fcf9f;
+  --pass-bg: #17301f;
+  --warn: #e6bd5c;
+  --warn-bg: #352a12;
+  --before: #a89f97;
+  --after: #ff8562;
+  --ct-changed: #bf97e8;
+  --ct-new: #5cc4ca;
+  --ct-lost: #e6bd5c;
+  --ct-same: #857d76;
 }
 
 @theme inline {
@@ -65,7 +71,9 @@
   --color-muted: var(--muted);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  --color-brand: var(--brand);
   --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
   --color-accent-bg: var(--accent-bg);
   --color-fail: var(--fail);
   --color-fail-bg: var(--fail-bg);
@@ -81,8 +89,11 @@
   --color-ct-new: var(--ct-new);
   --color-ct-lost: var(--ct-lost);
   --color-ct-same: var(--ct-same);
-  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Manrope Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Montserrat Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius-md: 12px;
+  --radius-lg: 24px;
 }
 
 html,
@@ -100,9 +111,8 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 .cm-editor {

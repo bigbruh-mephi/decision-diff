@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Badge, Button, ErrorBox, Skeleton, Tabs, inputCls } from "../components/ui";
+import { Badge, Button, ErrorBox, Skeleton, Tabs, cx, inputCls, titleCls } from "../components/ui";
 import { api, type Dataset, type Run, type Scope } from "../lib/api";
 import { useRunEvents } from "../lib/events";
 import { n } from "../lib/format";
@@ -68,7 +68,7 @@ function ScopeBar({ runId, name, scope }: { runId: string; name: string; scope: 
         {name}: вся популяция
       </button>
       {chips.map((c) => (
-        <span key={c.label} className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent-bg px-1.5 py-0.5 text-accent">
+        <span key={c.label} className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent-bg px-2.5 py-0.5 text-accent">
           <span aria-hidden className="text-muted">›</span>
           {c.label}
           <button onClick={c.drop} aria-label={`Убрать фильтр ${c.label}`} className="ml-0.5 text-muted hover:text-fail">
@@ -125,14 +125,14 @@ export function RunPage() {
   const tab = search.tab ?? (done ? "overview" : "journal");
   const setTab = (t: RunSearch["tab"]) => nav({ to: "/runs/$runId", params: { runId }, search: { tab: t, scope: search.scope, drill: t === "apps" ? search.drill : undefined } });
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs text-muted">
             <Link to="/" className="hover:text-fg">Прогоны</Link>
             <span aria-hidden>/</span>
           </div>
-          <h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
+          <h1 className={cx(titleCls, "flex flex-wrap items-center gap-3")}>
             {r.name} <StateBadge state={r.state} />
           </h1>
           <p className="num text-xs text-muted">
@@ -143,11 +143,11 @@ export function RunPage() {
         <div className="flex flex-wrap items-center gap-2">
           {done && (
             <>
-              <a href={`/api/runs/${runId}/export.html`} className="inline-flex h-8 items-center rounded-md border border-line-strong bg-surface px-3 text-[13px] font-medium hover:bg-surface-2">
+              <a href={`/api/runs/${runId}/export.html`} className="inline-flex h-9 items-center rounded-md border border-line-strong bg-surface px-4 text-[13px] font-medium hover:border-accent hover:text-accent">
                 Скачать HTML
               </a>
               <Button onClick={() => share.mutate()}>Ссылка на отчёт</Button>
-              <Link to="/workspace" search={{ run: runId }} className="inline-flex h-8 items-center rounded-md border border-line-strong bg-surface px-3 text-[13px] font-medium hover:bg-surface-2">
+              <Link to="/workspace" search={{ run: runId }} className="inline-flex h-9 items-center rounded-md border border-line-strong bg-surface px-4 text-[13px] font-medium hover:border-accent hover:text-accent">
                 Новая проверка
               </Link>
             </>
