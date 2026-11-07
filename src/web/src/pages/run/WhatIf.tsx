@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton, Stat, cx, inputCls } from "../../components/ui";
 import { api, type Scope } from "../../lib/api";
 import { n, pct, rate } from "../../lib/format";
+import { useScopeNav } from "../Run";
 
 type Param = { type: "enum" | "float" | "float_map" | "multi"; label?: string; values?: string[]; values_from?: string; keys_from?: string; min?: number; max?: number; step?: number; default: unknown };
 type Decl = { procedure: { id: string; name: string; sha: string }; label: string; params: Record<string, Param>; outcome: { field: string; values: string[] }; values: Record<string, unknown>; choices: Record<string, string[]> | null };
 type SwapRow = { before: string; after: string; apps: number };
 type Result = {
-  apps: number; slice: string; positive: string; fidelity: number; moved: number;
+  apps: number; slice: string; positive: string; fidelity: number; moved: number; moved_ids?: string[];
   approval_rate: { before: number; after: number; whatif: number };
   swap_vs_before: SwapRow[]; swap_vs_after: SwapRow[];
   segments: { field: string; value: string; apps: number; approval_slice: number; approval_whatif: number; moved: number }[];
@@ -91,6 +92,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const seq = useRef(0);
+  const go = useScopeNav(runId);
   useEffect(() => {
     if (decl.data && !values) setValues(decl.data.values);
   }, [decl.data, values]);
@@ -143,7 +145,13 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
           <Stat label="Доля одобрений BEFORE" value={r ? rate(r.approval_rate.before) : "…"} />
           <Stat label="Доля одобрений AFTER" value={r ? rate(r.approval_rate.after) : "…"} />
           <Stat label="Доля одобрений «что если»" value={r ? rate(r.approval_rate.whatif) : "…"} tone="accent" sub={r ? `${((r.approval_rate.whatif - r.approval_rate.after) * 100).toFixed(1).replace(".", ",")} п.п. к AFTER` : undefined} />
-          <Stat label={`Решение изменится относительно ${r?.slice ?? "среза"}`} value={r ? n(r.moved) : "…"} sub={r ? pct(r.moved, r.apps) : undefined} tone="warn" />
+          <Stat
+            label={`Решение изменится относительно ${r?.slice ?? "среза"}`}
+            value={r ? n(r.moved) : "…"}
+            sub={r ? `${pct(r.moved, r.apps)}${r.moved_ids && r.moved > r.moved_ids.length ? ` · откроются первые ${n(r.moved_ids.length)}` : ""}` : undefined}
+            tone="warn"
+            onClick={r?.moved_ids?.length ? () => go({ ...scope, apps: r.moved_ids }, "apps", { title: `решение изменится в сценарии «что если» (${n(r.moved)})` }) : undefined}
+          />
         </section>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
           {r && <Badge tone={r.fidelity === 1 ? "pass" : "warn"}>точность воспроизведения среза {(r.fidelity * 100).toFixed(1)}%</Badge>}

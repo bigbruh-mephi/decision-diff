@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Mono, Skeleton, cx } from "../../components/ui";
 import { api, type CheckResult, type CheckRow } from "../../lib/api";
-import { ms, n } from "../../lib/format";
+import { ms, n, plural } from "../../lib/format";
 import { useScopeNav } from "../Run";
 
 function verdict(r: CheckRow) {
@@ -16,7 +16,7 @@ export function ChecksView({ runId }: { runId: string }) {
   const checks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`) });
   const [filter, setFilter] = useState<"all" | "fail" | "pass">("all");
   const rows = useMemo(() => {
-    const all = (checks.data ?? []).flatMap((c) => c.rows.map((r) => ({ ...r, check: c })));
+    const all = (checks.data ?? []).flatMap((c) => c.rows.map((r, row) => ({ ...r, check: c, row })));
     const rank = (r: CheckRow) => (r.RESULT === "FAIL" ? (r.CONFIDENCE === "HIGH" ? 0 : 1) : 2);
     return all.filter((r) => filter === "all" || (filter === "fail" ? r.RESULT === "FAIL" : r.RESULT === "PASS")).sort((a, b) => rank(a) - rank(b) || a.LABEL.localeCompare(b.LABEL));
   }, [checks.data, filter]);
@@ -35,7 +35,7 @@ export function ChecksView({ runId }: { runId: string }) {
       ))}
       <Card>
         <CardHeader
-          title={`Отчёт автопроверок · ${rows.length} строк из ${(checks.data ?? []).length} проверок`}
+          title={`Отчёт автопроверок · ${plural(rows.length, "строка", "строки", "строк")} из ${plural((checks.data ?? []).length, "проверки", "проверок", "проверок")}`}
           hint="Строки всех проверок в одной таблице. Бледные строки — мало срабатываний, уверенности в поломке нет"
           actions={
             <div className="flex gap-1">
@@ -79,8 +79,8 @@ export function ChecksView({ runId }: { runId: string }) {
                       <td className="px-2 py-1.5"><Badge tone={v.tone}>{v.label}</Badge></td>
                       <td className="num px-4 py-1.5 text-right">
                         {r.APP_IDS.length ? (
-                          <button className="text-accent hover:underline" onClick={() => go({ apps: r.APP_IDS }, "apps")} title={r.CNT > r.APP_IDS.length ? `показаны ${r.APP_IDS.length} из ${r.CNT} (лимит app_ids_limit)` : undefined}>
-                            {n(r.APP_IDS.length)} шт.{r.CNT > r.APP_IDS.length && <span className="text-muted"> из {n(r.CNT)}</span>}
+                          <button className="text-accent hover:underline" onClick={() => go(r.CNT > r.APP_IDS.length ? { check: { sha: r.check.check_sha, row: r.row, cnt: r.CNT } } : { apps: r.APP_IDS }, "apps")}>
+                            {n(Math.max(r.CNT, r.APP_IDS.length))} шт.
                           </button>
                         ) : (
                           "—"

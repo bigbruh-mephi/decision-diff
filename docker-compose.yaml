@@ -1,8 +1,8 @@
 name: decision-diff
 
 x-app-env: &app-env
-  DD_PG_URL: postgresql://${DD_PG_USER:-dd}:${DD_PG_PASSWORD:-dd}@postgres:5432/dd
-  DD_AMQP_URL: amqp://${DD_AMQP_USER:-dd}:${DD_AMQP_PASSWORD:-dd}@rabbitmq:5672/dd
+  DD_PG_URL: postgresql://${DD_PG_USER:-dd}:${DD_PG_PASSWORD:?set DD_PG_PASSWORD in .env}@postgres:5432/dd
+  DD_AMQP_URL: amqp://${DD_AMQP_USER:-dd}:${DD_AMQP_PASSWORD:?set DD_AMQP_PASSWORD in .env}@rabbitmq:5672/dd
   DD_DATA_DIR: /data
   DD_DATASETS_DIR: /datasets
   DD_PROCEDURES_DIR: /procedures
@@ -12,7 +12,7 @@ services:
     image: postgres:18.6-alpine
     environment:
       POSTGRES_USER: ${DD_PG_USER:-dd}
-      POSTGRES_PASSWORD: ${DD_PG_PASSWORD:-dd}
+      POSTGRES_PASSWORD: ${DD_PG_PASSWORD:?set DD_PG_PASSWORD in .env}
       POSTGRES_DB: dd
     volumes: [pg-data:/var/lib/postgresql]
     ports: ["127.0.0.1:${DD_PG_PORT:-5432}:5432"]
@@ -27,7 +27,7 @@ services:
     hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${DD_AMQP_USER:-dd}
-      RABBITMQ_DEFAULT_PASS: ${DD_AMQP_PASSWORD:-dd}
+      RABBITMQ_DEFAULT_PASS: ${DD_AMQP_PASSWORD:?set DD_AMQP_PASSWORD in .env}
       RABBITMQ_DEFAULT_VHOST: dd
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq

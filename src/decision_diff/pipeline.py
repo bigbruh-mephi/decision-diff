@@ -4,6 +4,8 @@ Procedure code travels as ``{kind: {"sha", "code", "name", "params"}}`` snapshot
 version recorded when it started; loaded modules are cached per process by sha.
 """
 
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from .engine import chunk, finalize, ingest, mart, procedures
 from .settings import settings
 
 _cache = {}
+APP_IDS_PREVIEW = 20
 
 
 def _proc(snap):
@@ -85,27 +88,45 @@ def build_run(chunk_dirs, run_file, report_params):
 
 
 def run_checks(run_file, check_snaps):
-    """Execute each check in its own sandbox over the finished run file; one result entry per check."""
+    """Execute each check in its own sandbox over the finished run file; one result entry per check.
+
+    The platform asks every check for all its APP_IDS (``app_ids_limit`` override, which the contract allows): the
+    full lists go to ``check_apps/<sha>.json`` next to the run file for drill-down and app linkage, and the rows keep
+    only the check's own ``app_ids_limit`` as a preview.
+    """
     out = []
     for snap in check_snaps:
         t0 = time.time()
         try:
-            chk_id, label, rows = confined(_check_body, (run_file, snap), read=[run_file])
-            out.append({"check_id": chk_id, "sha": snap["sha"], "label": label,
-                        "rows": procedures.validate_check_rows(chk_id, rows),
+            chk_id, label, rows, preview = confined(_check_body, (run_file, snap), read=[run_file])
+            rows = procedures.validate_check_rows(chk_id, rows)
+            _store_app_ids(run_file, snap["sha"], [r["APP_IDS"] for r in rows])
+            out.append({"check_id": chk_id, "sha": snap["sha"], "label": label, "started_at": t0,
+                        "rows": [{**r, "APP_IDS": r["APP_IDS"][:preview]} for r in rows],
                         "duration_ms": (time.time() - t0) * 1000, "error": None})
         except Exception as e:
             out.append({"check_id": snap.get("id") or snap["name"], "sha": snap["sha"], "label": snap["name"],
-                        "rows": [], "duration_ms": (time.time() - t0) * 1000, "error": f"{type(e).__name__}: {e}"})
+                        "started_at": t0, "rows": [], "duration_ms": (time.time() - t0) * 1000,
+                        "error": f"{type(e).__name__}: {e}"})
     return out
+
+
+def _store_app_ids(run_file, sha, ids):
+    d = Path(run_file).parent / "check_apps"
+    d.mkdir(exist_ok=True)
+    tmp = d / f"{sha}.{os.getpid()}.tmp"
+    tmp.write_bytes(orjson.dumps(ids))
+    tmp.replace(d / f"{sha}.json")
 
 
 def _check_body(run_file, snap):
     chk = _proc({**snap, "kind": "check"})
+    preview = chk["params"].get("app_ids_limit", APP_IDS_PREVIEW)
     con = mart.open_run(run_file, threads=1)
     try:
-        rows = chk["entrypoint"](mart.Mart(con), _with_lineage(con, chk["params"]))
-        return chk["id"], chk["label"], rows
+        params = {**_with_lineage(con, chk["params"]), "app_ids_limit": sys.maxsize}
+        rows = chk["entrypoint"](mart.Mart(con), params)
+        return chk["id"], chk["label"], rows, preview if isinstance(preview, int) and preview >= 0 else APP_IDS_PREVIEW
     finally:
         con.close()
 

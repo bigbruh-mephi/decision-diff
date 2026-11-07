@@ -19,6 +19,7 @@ from the source without executing it. ``entrypoint(data, params)`` returns one o
 """
 
 import base64
+import itertools
 import mmap  # noqa: F401
 import os
 import shutil
@@ -199,8 +200,12 @@ def _bitmaps(codes, k):
     return [BitMap(x) for x in idx]
 
 
-def metrics(rep, res, spec, max_values=50, top=30):
-    """Approval rate, swaps, fidelity and per-segment deltas of a what-if result under scope ``spec``."""
+def metrics(rep, res, spec, max_values=50, top=30, max_ids=500):
+    """Approval rate, swaps, fidelity and per-segment deltas of a what-if result under scope ``spec``.
+
+    ``moved_ids`` lists the first ``max_ids`` applications whose decision would move, so the number drills into the
+    application list; the cap keeps the id list small enough for a URL scope (``moved`` is always exact).
+    """
     s = rep.scope(spec)
     values = res["outcome"]["values"]
     labels = [*values, "(other)"]
@@ -238,5 +243,6 @@ def metrics(rep, res, spec, max_values=50, top=30):
             "fidelity": round(len(agree & s) / n, 4) if n else None,
             "approval_rate": {"before": rate(before.get(values[pos], BitMap())),
                               "after": rate(after.get(values[pos], BitMap())), "whatif": rate(new[pos])},
-            "moved": len(moved), "swap_vs_before": swap(before), "swap_vs_after": swap(after),
+            "moved": len(moved), "moved_ids": [rep.app_id[i] for i in itertools.islice(moved, max_ids)],
+            "swap_vs_before": swap(before), "swap_vs_after": swap(after),
             "segments": segs[:top]}

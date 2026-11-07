@@ -3,19 +3,37 @@
 Registration only inspects source (AST); user code is executed exclusively inside the worker sandbox.
 """
 
+import asyncio
+import logging
 from pathlib import Path
 
 from . import db
 from .engine import procedures
 
+log = logging.getLogger("dd.catalog")
+_seen = {}
+
 
 async def sync_files(c, root, owner_id=None):
-    """Register every ``*.py`` under ``root`` as a file procedure (kind from its contract); returns ``{name: id}``."""
-    ids = {}
+    """Register every ``*.py`` under ``root`` as a file procedure (kind from its contract); returns ``{name: id}``.
+
+    A file that does not satisfy the contract is logged and skipped (its previous registration, if any, stays);
+    procedures whose file is gone are removed, their code versions stay for the history of past runs.
+    """
+    if not Path(root).is_dir():
+        log.warning("procedures directory %s does not exist; placed procedures left as they are", root)
+        return {}
+    await c.execute("SELECT pg_advisory_xact_lock(4243)")
+    ids, present = {}, []
     for f in sorted(Path(root).rglob("*.py")):
-        code = f.read_text(encoding="utf-8")
-        spec = procedures.inspect_source(code, str(f))
         name = str(f.relative_to(root))
+        present.append(name)
+        try:
+            code = f.read_text(encoding="utf-8")
+            spec = procedures.inspect_source(code, str(f))
+        except (OSError, ValueError, RecursionError, MemoryError) as e:
+            log.warning("placed procedure %s skipped: %s", name, e)
+            continue
         await db.store_code(c, spec["kind"], name, code, spec["sha"])
         row = await (await c.execute("""
             UPDATE procedures SET sha = %s, kind = %s, name = %s, updated_at = now() WHERE origin = 'file' AND path = %s
@@ -25,7 +43,21 @@ async def sync_files(c, root, owner_id=None):
                 INSERT INTO procedures (owner_id, kind, name, origin, path, sha) VALUES (%s, %s, %s, 'file', %s, %s)
                 RETURNING id""", (owner_id, spec["kind"], spec["label"], name, spec["sha"]))).fetchone()
         ids[name] = row["id"]
+    await c.execute("DELETE FROM procedures WHERE origin = 'file' AND NOT (path = ANY(%s))", (present,))
     return ids
+
+
+def _signature(root):
+    return sorted((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in Path(root).rglob("*.py"))
+
+
+async def sync_changed(c, root):
+    """Re-sync placed files only when a ``*.py`` under ``root`` was added, changed or removed (mtime check)."""
+    sig = await asyncio.to_thread(_signature, root)
+    if _seen.get(str(root)) != sig:
+        await sync_files(c, root)
+        await c.commit()
+        _seen[str(root)] = sig
 
 
 async def save_workspace(c, owner_id, code, proc_id=None):

@@ -2,7 +2,8 @@
 
 BEFORE and AFTER score the SAME applications, so the change is a paired difference: delta = (swap_in - swap_out) / n
 with the Bonett-Price adjusted Wald interval. FAIL when the interval excludes zero and |delta| >= `min_effect`
-(direction "both" or "drop"). Segments with n < `min_n` are exploratory (CONFIDENCE LOW).
+(direction "both" or "drop"). Segments with n < `min_n` are exploratory (CONFIDENCE LOW); a segment value covering
+every application repeats the ALL row and is skipped.
 """
 
 import math
@@ -38,7 +39,10 @@ def run(mart, params=None):
             if b and not a:
                 g["out"].append(s["APP_ID"])
     rows = []
+    total = groups.get(("ALL", ""), {"n": 0})["n"]
     for (f, v), g in sorted(groups.items()):
+        if f != "ALL" and g["n"] == total:
+            continue
         n, n_in, n_out = g["n"], len(g["in"]), len(g["out"])
         delta = (n_in - n_out) / n
         lo, hi = paired_ci(n, n_in, n_out, p["z"])

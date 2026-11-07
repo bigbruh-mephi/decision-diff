@@ -26,6 +26,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 libc.syscall.restype = ctypes.c_long
 NR_CREATE, NR_ADD, NR_RESTRICT = 444, 445, 446
 PR_SET_NO_NEW_PRIVS = 38
+M_ARENA_MAX = -8
 FS_EXECUTE, FS_READ_FILE, FS_READ_DIR = 1 << 0, 1 << 2, 1 << 3
 FS_READ = FS_READ_FILE | FS_READ_DIR
 FS_ABI = {1: (1 << 13) - 1, 2: (1 << 14) - 1, 3: (1 << 15) - 1, 5: (1 << 16) - 1}
@@ -109,12 +110,17 @@ def _seccomp():
 
 
 def confine(read, write, uid=None, mem_mb=2048, cpu_s=300, nofile=128, nproc=64, fsize_mb=1024):
-    """Irreversibly confine the calling single-threaded process; returns the Landlock ABI used."""
+    """Irreversibly confine the calling single-threaded process; returns the Landlock ABI used.
+
+    glibc malloc arenas are capped first: every arena of a multi-threaded library reserves 64 MB of address space that
+    ``RLIMIT_AS`` counts (DuckDB's default 48 I/O threads took 3.5 GB before any query).
+    """
     os.setsid()
     if uid is not None and os.getuid() == 0:
         os.setgroups([])
         os.setresgid(uid, uid, uid)
         os.setresuid(uid, uid, uid)
+    libc.mallopt(M_ARENA_MAX, 2)
     for lim, val in ((resource.RLIMIT_AS, mem_mb << 20), (resource.RLIMIT_CPU, cpu_s),
                      (resource.RLIMIT_NOFILE, nofile), (resource.RLIMIT_NPROC, nproc),
                      (resource.RLIMIT_FSIZE, fsize_mb << 20), (resource.RLIMIT_CORE, 0)):

@@ -14,7 +14,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
 from . import queue, whatif
-from .api import STATE, _own_run, _report, j, pool, session, user
+from .api import STATE, _interactive_slot, _own_run, _report, j, pool, session, user
 from .engine import procedures
 from .settings import settings
 
@@ -63,6 +63,7 @@ async def post_whatif(run_id: uuid.UUID, body: WhatIfBody, s=Depends(user)):
     """Queue an evaluation of ``values`` (validated by the worker against the declaration); poll its id."""
     await _own_run(run_id, s, states=("done",))
     async with pool().connection() as c:
+        await _interactive_slot(c, "whatif_runs", s["user_id"])
         row, _ = await _procedure(c, s, body.procedure_id)
         got = await (await c.execute("""INSERT INTO whatif_runs (run_id, user_id, code_sha, "values", scope)
                                         VALUES (%s, %s, %s, %s, %s) RETURNING id""",

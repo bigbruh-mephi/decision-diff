@@ -1,16 +1,20 @@
 """Read model of a finished run for the report API: every count is an exact number of distinct applications.
 
-A *scope* narrows the population: ``{"seg": {field: [values]}, "cluster": cid, "apps": [app ids]}`` -> one bitmap
-(AND across fields and keys, OR within one field). All blocks accept a scope, so the analyst can zoom from the
+A *scope* narrows the population: ``{"seg": {field: [values]}, "cluster": cid, "apps": [app ids],
+"check": {"sha", "row"}}`` -> one bitmap (AND across fields and keys, OR within one field); ``check`` is the full
+APP_IDS of one check row, stored by the worker in ``check_apps/<sha>.json`` next to the run file. All blocks accept a scope, so the analyst can zoom from the
 population to a segment, a change cluster, an application and an attribute and back without losing context.
 Domain words (which field is the decision, which value is an approval, which paths are input data) come from the
 segments procedure params, never from this code.
 """
 
 import fnmatch
+import re
 import threading
 from collections import OrderedDict
+from pathlib import Path
 
+import orjson
 from pyroaring import BitMap
 
 from .engine import finalize, mart
@@ -64,7 +68,47 @@ class RunReport:
             inputs = [_glob(p) for p in self.params.get("input_paths", [])]
             self.input_paths = {pid for pid, a in self.attrs.items() if any(fnmatch.fnmatchcase(a["PATH"], g)
                                                                             for g in inputs)}
+        self.issues = {}
+        for kind, i, rows in q.execute("SELECT KIND, app_ord, count(*) FROM issues GROUP BY ALL ORDER BY ALL").fetchall():
+            bm, per = self.issues.setdefault(kind, (BitMap(), {}))
+            bm.add(i)
+            per[i] = rows
+        self.dir, self.check_ids = Path(path).parent, {}
         self.lock = threading.Lock()
+
+    def check_apps(self, sha):
+        """Per-row bitmaps of the full APP_IDS of check version ``sha``; ``[]`` when the worker stored none."""
+        f = self.dir / "check_apps" / f"{sha}.json"
+        if not re.fullmatch(r"[0-9a-f]{16}", sha) or not f.is_file():
+            return []
+        mtime = f.stat().st_mtime_ns
+        hit = self.check_ids.get(sha)
+        if hit is None or hit[0] != mtime:
+            hit = self.check_ids[sha] = (mtime, [BitMap(self.app_ord[a] for a in ids if a in self.app_ord)
+                                                 for ids in orjson.loads(f.read_bytes())])
+        return hit[1]
+
+    def app_checks(self, app_id, results):
+        """Rows of check ``results`` whose full APP_IDS contain ``app_id`` (the preview when none were stored)."""
+        i = self.app_ord.get(app_id)
+        out = []
+        for r in results:
+            bms = self.check_apps(r["check_sha"])
+            for k, row in enumerate(r["rows"]):
+                if (i in bms[k]) if k < len(bms) else app_id in row["APP_IDS"]:
+                    out.append({"check_id": r["check_id"], "label": r["label"], "row": row})
+        return out
+
+    def issue_rows(self, s, examples=5):
+        """Parse issues (key collisions, duplicate array keys, missing key fields, an app missing in a slice...)
+        within bitmap ``s``: ``[{kind, apps, rows, examples}]``."""
+        out = []
+        for kind, (bm, per) in self.issues.items():
+            apps = bm & s
+            if apps:
+                out.append({"kind": kind, "apps": len(apps), "rows": sum(per[i] for i in apps),
+                            "examples": [self.app_id[i] for i in apps[:examples]]})
+        return sorted(out, key=lambda r: -r["apps"])
 
     def scope(self, spec):
         """Bitmap of the applications in scope ``spec`` (see module docstring)."""
@@ -76,6 +120,9 @@ class RunReport:
             bm &= next((c["apps"] for c in self.clusters if c["cid"] == int(spec["cluster"])), BitMap())
         if spec.get("apps") is not None:
             bm &= BitMap(self.app_ord[a] for a in spec["apps"] if a in self.app_ord)
+        if spec.get("check"):
+            rows, k = self.check_apps(str(spec["check"].get("sha"))), spec["check"].get("row")
+            bm &= rows[k] if isinstance(k, int) and 0 <= k < len(rows) else BitMap()
         return bm
 
     def summary(self, spec):
@@ -96,7 +143,7 @@ class RunReport:
                 "approval_before": rate(self.dec_before), "approval_after": rate(self.dec_after),
                 "input_driven": len(BitMap.union(BitMap(), *(c["apps"] for c in self.clusters
                                                              if self._origin(c) == "input")) & s),
-                "swap": swap}
+                "swap": swap, "issues": self.issue_rows(s)}
 
     def _origin(self, c):
         """``input`` when the cluster's changes include input-data paths (the lineage's input stages, else the
@@ -176,9 +223,12 @@ class RunReport:
         """Exact distinct-app counts for every combination of ``rows + cols`` dimensions.
 
         Dimensions are fact fields (``FACT_DIMS``), segment fields or ``CLUSTER``; ``filters`` maps a dimension to
-        allowed values. Returns ``{"dims", "cells": [[*keys, apps]], "truncated"}``.
+        allowed values. Returns ``{"dims", "cells": [[*keys, apps]], "truncated"}`` plus exact distinct-app totals
+        ``row_totals`` / ``col_totals`` (``[[*keys, apps]]`` over the row or column dimensions) and ``total`` when
+        not truncated.
         """
         dims = list(rows) + list(cols)
+        nr = len(rows)
         fdims = [d for d in dims if d in FACT_DIMS]
         sdims = [d for d in dims if d not in FACT_DIMS]
         s = self.scope(spec)
@@ -191,19 +241,25 @@ class RunReport:
             if all(str(self._fact_value(f, d)) in v for d, v in ffilt.items()):
                 key = tuple(self._fact_value(f, d) for d in fdims)
                 groups.setdefault(key, []).append(bm)
-        cells = []
+        cells, by_row, by_col = [], {}, {}
         for key, bms in groups.items():
             base = BitMap.union(*bms) & s
             if not base:
                 continue
             for skey, sbm in self._split_all(sdims):
-                n = len(base & sbm) if sdims else len(base)
-                if n:
+                bm = base & sbm if sdims else base
+                if bm:
                     full = dict(zip(fdims, key)) | dict(zip(sdims, skey))
-                    cells.append([*(full[d] for d in dims), n])
+                    keys = [full[d] for d in dims]
+                    cells.append([*keys, len(bm)])
                     if len(cells) >= MAX_CELLS:
                         return {"dims": dims, "cells": cells, "truncated": True}
-        return {"dims": dims, "cells": cells, "truncated": False}
+                    by_row.setdefault(tuple(keys[:nr]), BitMap()).update(bm)
+                    by_col.setdefault(tuple(keys[nr:]), BitMap()).update(bm)
+        return {"dims": dims, "cells": cells, "truncated": False,
+                "row_totals": [[*k, len(b)] for k, b in by_row.items()],
+                "col_totals": [[*k, len(b)] for k, b in by_col.items()],
+                "total": len(BitMap.union(*by_row.values())) if by_row else 0}
 
     def _split(self, dim):
         if dim == "CLUSTER":

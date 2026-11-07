@@ -8,6 +8,7 @@ import csv
 import gzip
 import io
 import json
+import sys
 
 import orjson
 
@@ -64,34 +65,42 @@ def load_json(data):
 
 
 def _xml_tree(data, array_tags):
+    """XML -> tree with lxml's natural depth limit (``huge_tree``); entities and DTDs stay disabled. The conversion is
+    iterative, so it never imposes a lower depth limit than the parser."""
     from lxml import etree
 
-    parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False, load_dtd=False)
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True, load_dtd=False)
     try:
         root = etree.fromstring(data, parser)
     except etree.XMLSyntaxError as e:
+        if "depth" in str(e).lower():
+            raise FormatError(f"XML nesting is deeper than the parser limit (libxml2): {e}") from e
         raise FormatError(f"invalid XML: {e}") from e
 
-    def conv(el):
-        node = {"@" + k: v for k, v in el.attrib.items()}
-        for c in el:
-            if not isinstance(c.tag, str):
-                continue
-            tag = etree.QName(c).localname
-            v = conv(c)
-            if tag in node:
-                prev = node[tag]
-                node[tag] = prev + [v] if isinstance(prev, list) else [prev, v]
-            else:
-                node[tag] = [v] if tag in array_tags else v
-        text = (el.text or "").strip()
-        if not node:
-            return text
-        if text:
-            node["#text"] = text
-        return node
+    def attrs(el):
+        return {"@" + k: v for k, v in el.attrib.items()}
 
-    return {etree.QName(root).localname: conv(root)}
+    stack, nodes = [(root, iter(root))], [attrs(root)]
+    while True:
+        el, children = stack[-1]
+        c = next((c for c in children if isinstance(c.tag, str)), None)
+        if c is not None:
+            stack.append((c, iter(c)))
+            nodes.append(attrs(c))
+            continue
+        stack.pop()
+        node, text = nodes.pop(), (el.text or "").strip()
+        if node and text:
+            node["#text"] = text
+        v = node or text
+        if not stack:
+            return {etree.QName(el).localname: v}
+        parent, tag = nodes[-1], etree.QName(el).localname
+        if tag in parent:
+            prev = parent[tag]
+            parent[tag] = prev + [v] if isinstance(prev, list) else [prev, v]
+        else:
+            parent[tag] = [v] if tag in array_tags else v
 
 
 def _rows(rows, id_field, name):
@@ -123,9 +132,13 @@ def parse(name, data, id_field=None, xml_array_tags=()):
         import yaml
 
         try:
-            yield stem, yaml.safe_load(data)
+            doc = yaml.safe_load(data)
         except yaml.YAMLError as e:
             raise FormatError(f"invalid YAML: {e}") from e
+        except RecursionError as e:
+            raise FormatError(f"YAML nesting is deeper than the parser limit (PyYAML is recursive: about "
+                              f"{sys.getrecursionlimit() // 2} levels)") from e
+        yield stem, doc
     elif fmt in ("csv", "tsv"):
         text = data.decode("utf-8-sig")
         yield from _rows(csv.DictReader(io.StringIO(text), delimiter="\t" if fmt == "tsv" else
@@ -133,7 +146,13 @@ def parse(name, data, id_field=None, xml_array_tags=()):
     elif fmt == "msgpack":
         import msgpack
 
-        yield stem, msgpack.unpackb(data, raw=False, strict_map_key=False)
+        try:
+            doc = msgpack.unpackb(data, raw=False, strict_map_key=False)
+        except msgpack.StackError as e:
+            raise FormatError("MessagePack nesting is deeper than the parser limit (msgpack, 1024 levels)") from e
+        except ValueError as e:
+            raise FormatError(f"invalid MessagePack: {e}") from e
+        yield stem, doc
     else:
         import pyarrow as pa
         import pyarrow.parquet as pq

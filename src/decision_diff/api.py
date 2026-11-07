@@ -6,6 +6,7 @@ the sandbox. Finished runs are immutable, so report payloads are serialized once
 
 import asyncio
 import hashlib
+import hmac
 import os
 import shutil
 import time
@@ -30,6 +31,7 @@ from .settings import settings
 REQUESTS = Counter("dd_http_requests_total", "HTTP requests", ["route", "status"])
 LATENCY = Histogram("dd_http_request_seconds", "HTTP latency", ["route"])
 MAX_UPLOAD = 2 << 30
+MAX_ENTRIES = 300_000
 STATE = {}
 
 
@@ -39,7 +41,7 @@ async def lifespan(app):
     pool = await db.pool(max_size=20)
     await db.migrate(pool)
     async with pool.connection() as c:
-        await catalog.sync_files(c, settings.procedures_dir)
+        await catalog.sync_changed(c, settings.procedures_dir)
         admin, password = os.environ.get("DD_ADMIN_LOGIN"), os.environ.get("DD_ADMIN_PASSWORD")
         if admin and password:
             await c.execute("""INSERT INTO users (login, password_hash) VALUES (%s, %s)
@@ -52,7 +54,9 @@ async def lifespan(app):
     await pool.close()
 
 
-app = FastAPI(title="decision-diff", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+_DOCS = os.environ.get("DD_API_DOCS", "0") in ("1", "true", "yes")
+app = FastAPI(title="decision-diff", lifespan=lifespan, docs_url="/api/docs" if _DOCS else None,
+              openapi_url="/api/openapi.json" if _DOCS else None)
 
 
 @app.middleware("http")
@@ -99,6 +103,15 @@ class LoginBody(Credentials):
     password: str = Field(min_length=1, max_length=256)
 
 
+_HASH_SLOTS = asyncio.Semaphore(4)
+
+
+async def _argon(fn, *args):
+    """argon2 off the event loop, at most 4 at once: bounds CPU and memory (19 MiB each) under login spraying."""
+    async with _HASH_SLOTS:
+        return await asyncio.to_thread(fn, *args)
+
+
 @app.post("/api/auth/register")
 async def register(body: Credentials, request: Request, response: Response):
     async with pool().connection() as c:
@@ -107,7 +120,7 @@ async def register(body: Credentials, request: Request, response: Response):
             raise HTTPException(403, "регистрация закрыта, обратитесь к администратору")
         try:
             row = await (await c.execute("INSERT INTO users (login, password_hash) VALUES (%s, %s) RETURNING id",
-                                         (body.login, auth.hash_password(body.password)))).fetchone()
+                                         (body.login, await _argon(auth.hash_password, body.password)))).fetchone()
         except Exception as e:
             raise HTTPException(409, "логин уже занят") from e
         await c.execute("INSERT INTO audit (user_id, action) VALUES (%s, 'register')", (row["id"],))
@@ -130,17 +143,20 @@ async def _login(c, user_id, login, request, response, run_id=None, days=auth.SE
 
 @app.post("/api/auth/login")
 async def login(body: LoginBody, request: Request, response: Response):
+    ip = request.client.host if request.client else ""
     async with pool().connection() as c:
-        failed = (await (await c.execute("""SELECT count(*) AS n FROM audit WHERE action = 'login.failed'
-                                            AND target = %s AND ts > now() - interval '15 minutes'""",
-                                         (body.login,))).fetchone())["n"]
-        if failed >= 10:
+        failed = await (await c.execute("""SELECT count(*) FILTER (WHERE target = %s) AS login,
+                                                  count(*) FILTER (WHERE data->>'ip' = %s) AS ip
+                                           FROM audit WHERE action = 'login.failed'
+                                           AND ts > now() - interval '15 minutes'""", (body.login, ip))).fetchone()
+        if failed["login"] >= 10 or failed["ip"] >= 100:
             raise HTTPException(429, "слишком много неудачных попыток, повторите через 15 минут")
         row = await (await c.execute("SELECT id, password_hash FROM users WHERE login = %s",
                                      (body.login,))).fetchone()
-        ok = auth.verify_password(row["password_hash"] if row else auth.hash_password("x" * 12), body.password)
+        ok = await _argon(auth.verify_password, row["password_hash"] if row else auth.DUMMY_HASH, body.password)
         if not (row and ok):
-            await c.execute("INSERT INTO audit (action, target) VALUES ('login.failed', %s)", (body.login,))
+            await c.execute("INSERT INTO audit (action, target, data) VALUES ('login.failed', %s, %s)",
+                            (body.login, Jsonb({"ip": ip})))
             await c.commit()
             raise HTTPException(401, "неверный логин или пароль")
         await c.execute("INSERT INTO audit (user_id, action) VALUES (%s, 'login')", (row["id"],))
@@ -173,8 +189,8 @@ def _dataset_info(path):
         return None
     man = ingest.read_manifest(path)
     return {"path": str(path.relative_to(settings.datasets_dir)), "run_id": man.get("run_id", path.name),
-            "applications": man.get("applications"), "before": sum(1 for _ in b.iterdir()),
-            "after": sum(1 for _ in a.iterdir()), "excluded": man.get("technical_fields_always_differ", [])}
+            "applications": man.get("applications"), "before": len(os.listdir(b)),
+            "after": len(os.listdir(a)), "excluded": man.get("technical_fields_always_differ", [])}
 
 
 def _visible(rel, s):
@@ -185,16 +201,24 @@ def _visible(rel, s):
 
 @app.get("/api/datasets")
 async def datasets(s=Depends(user)):
-    root = settings.datasets_dir
-    found = []
-    for m in sorted(root.rglob("*")):
-        if not _visible(m.relative_to(root), s):
-            continue
-        if m.is_dir() and ((m / "manifest.json").exists() or (m / "RESULTS").is_dir()):
-            info = await asyncio.to_thread(_dataset_info, m)
-            if info:
+    return await asyncio.to_thread(_find_datasets, s)
+
+
+def _find_datasets(s):
+    """Dataset folders visible to the user; the walk does not descend into a found dataset (its response files)."""
+    root, found = settings.datasets_dir, []
+    for d, dirs, files in os.walk(root):
+        m = Path(d)
+        rel = m.relative_to(root)
+        if rel != Path("uploads") and not _visible(rel, s):
+            dirs.clear()
+        elif m != root and ("manifest.json" in files or "RESULTS" in dirs):
+            dirs.clear()
+            if info := _dataset_info(m):
                 found.append(info)
-    return found
+        else:
+            dirs.sort()
+    return sorted(found, key=lambda x: x["path"])
 
 
 def _resolve_dataset(rel, s):
@@ -207,15 +231,21 @@ def _resolve_dataset(rel, s):
 
 
 def _safe_extract(zip_path, dest):
+    """Extract after checking every member: inside ``dest``, at most MAX_ENTRIES files and MAX_UPLOAD bytes in total
+    (declared sizes; zipfile stops reading a member at its declared size), and leaving 10% of the volume free."""
     with zipfile.ZipFile(zip_path) as z:
+        members = z.infolist()
+        if len(members) > MAX_ENTRIES:
+            raise HTTPException(413, f"в архиве больше {MAX_ENTRIES} файлов")
         total = 0
-        for info in z.infolist():
+        for info in members:
             target = (dest / info.filename).resolve()
             if not target.is_relative_to(dest.resolve()):
                 raise HTTPException(400, f"небезопасный путь в архиве: {info.filename}")
             total += info.file_size
-            if total > 8 * MAX_UPLOAD or info.file_size > MAX_UPLOAD:
-                raise HTTPException(413, "архив превышает допустимый размер после распаковки")
+        disk = shutil.disk_usage(dest)
+        if total > MAX_UPLOAD or total > disk.free - disk.total // 10:
+            raise HTTPException(413, "архив превышает допустимый размер или свободное место на диске")
         z.extractall(dest)
 
 
@@ -252,6 +282,7 @@ async def upload_dataset(file: UploadFile, s=Depends(user)):
 @app.get("/api/procedures")
 async def list_procedures(s=Depends(user)):
     async with pool().connection() as c:
+        await catalog.sync_changed(c, settings.procedures_dir)
         rows = await (await c.execute("""
             SELECT id, kind, name, origin, path, sha, updated_at, owner_id = %s AS mine FROM procedures
             WHERE origin = 'file' OR owner_id = %s ORDER BY kind, origin, name""",
@@ -268,7 +299,11 @@ async def get_procedure(pid: uuid.UUID, s=Depends(user)):
                                      (pid, s["user_id"]))).fetchone()
     if not row:
         raise HTTPException(404, "процедура не найдена")
-    return j(row)
+    try:
+        declared = procedures.declaration(row["code"])[1].get("params")
+    except procedures.ProcedureError:
+        declared = None
+    return j({**row, "params": declared if isinstance(declared, dict) else {}})
 
 
 class Code(BaseModel):
@@ -306,10 +341,21 @@ async def inspect_procedure(body: Code, _=Depends(user)):
 
 
 @app.get("/api/code/{sha}")
-async def code_version(sha: str, _=Depends(session)):
+async def code_version(sha: str, s=Depends(user)):
+    """Source of a code version the user can reach: a shipped file procedure, their own procedure, or code that ran
+    in their run, cell or what-if."""
     async with pool().connection() as c:
-        row = await (await c.execute("SELECT sha, kind, name, code, created_at FROM code_versions WHERE sha = %s",
-                                     (sha,))).fetchone()
+        row = await (await c.execute("""
+            SELECT v.sha, v.kind, v.name, v.code, v.created_at FROM code_versions v WHERE v.sha = %(sha)s AND (
+              EXISTS (SELECT 1 FROM procedures p WHERE p.sha = v.sha AND (p.origin = 'file' OR p.owner_id = %(u)s))
+              OR EXISTS (SELECT 1 FROM runs r JOIN stage_runs x ON x.run_id = r.id
+                         WHERE r.owner_id = %(u)s AND x.code_sha = v.sha)
+              OR EXISTS (SELECT 1 FROM runs r JOIN check_results x ON x.run_id = r.id
+                         WHERE r.owner_id = %(u)s AND x.check_sha = v.sha)
+              OR EXISTS (SELECT 1 FROM cell_runs x WHERE x.user_id = %(u)s AND x.code_sha = v.sha)
+              OR EXISTS (SELECT 1 FROM runs r JOIN whatif_runs x ON x.run_id = r.id
+                         WHERE r.owner_id = %(u)s AND x.code_sha = v.sha))""",
+                                     {"sha": sha, "u": s["user_id"]})).fetchone()
     if not row:
         raise HTTPException(404, "версия кода не найдена")
     return j(row)
@@ -404,6 +450,8 @@ async def create_run(body: RunBody, s=Depends(user)):
         except procedures.ProcedureError as e:
             raise HTTPException(422, str(e)) from e
         run_id = await db.create_run(c, s["user_id"], body.name or Path(dataset).name, snap, params, body.config_id)
+        if body.seal:
+            await c.execute("UPDATE runs SET seal_requested = true WHERE id = %s", (run_id,))
         await db.open_batch(c, run_id, str(source))
         await c.execute("INSERT INTO audit (user_id, action, target) VALUES (%s, 'run.create', %s)",
                         (s["user_id"], str(run_id)))
@@ -454,6 +502,15 @@ async def cancel_run(run_id: uuid.UUID, s=Depends(user)):
     return {"ok": True}
 
 
+async def _interactive_slot(c, table, user_id, limit=4):
+    """At most ``limit`` unfinished interactive executions per user, so one analyst cannot fill the shared queue."""
+    row = await (await c.execute(f"""SELECT count(*) AS n FROM {table} WHERE user_id = %s
+                                     AND state IN ('queued', 'running')
+                                     AND created_at > now() - interval '10 minutes'""", (user_id,))).fetchone()
+    if row["n"] >= limit:
+        raise HTTPException(429, "слишком много запусков одновременно, дождитесь завершения предыдущих")
+
+
 async def _own_run(run_id, s, states=None):
     async with pool().connection() as c:
         row = await (await c.execute("SELECT * FROM runs WHERE id = %s", (run_id,))).fetchone()
@@ -485,7 +542,7 @@ async def get_run(run_id: uuid.UUID, s=Depends(session)):
             GROUP BY state""", (run_id,))).fetchall()
     return j({**{k: row[k] for k in ("id", "name", "state", "apps", "total_chunks", "done_chunks", "failed_chunks",
                                      "stats", "error", "created_at", "sealed_at", "finished_at", "config_id",
-                                     "params")},
+                                     "params", "seal_requested")},
               "procedures": row["procedures"], "chunks": chunks})
 
 
@@ -675,10 +732,10 @@ async def app_detail(run_id: uuid.UUID, app_id: str, s=Depends(session)):
     if res is None:
         raise HTTPException(404, "заявки нет в этом прогоне")
     async with pool().connection() as c:
-        checks = await (await c.execute("""SELECT check_id, label, r AS row FROM check_results,
-                                           jsonb_array_elements(rows) r
-                                           WHERE run_id = %s AND r->'APP_IDS' ? %s""", (run_id, app_id))).fetchall()
-    return j({**res, "checks": checks})
+        results = await (await c.execute("""SELECT DISTINCT ON (check_id) check_id, check_sha, label, rows
+                                            FROM check_results WHERE run_id = %s ORDER BY check_id, created_at DESC""",
+                                         (run_id,))).fetchall()
+    return j({**res, "checks": await asyncio.to_thread(rep.app_checks, app_id, results)})
 
 
 @app.get("/api/runs/{run_id}/checks")
@@ -759,6 +816,7 @@ async def run_cell(body: CellRun, s=Depends(user)):
         await _own_run(body.run_id, s, states=("done",))
     sha = hashlib.sha256(body.code.encode()).hexdigest()[:16]
     async with pool().connection() as c:
+        await _interactive_slot(c, "cell_runs", s["user_id"])
         await db.store_code(c, "cell", "cell", body.code, sha)
         row = await (await c.execute("INSERT INTO cell_runs (user_id, run_id, code_sha) VALUES (%s, %s, %s) "
                                      "RETURNING id", (s["user_id"], body.run_id, sha))).fetchone()
@@ -791,15 +849,30 @@ async def share(run_id: uuid.UUID, request: Request, s=Depends(user)):
     return {"url": str(request.base_url).rstrip("/") + f"/s/{token}"}
 
 
+@app.delete("/api/runs/{run_id}/share", status_code=204)
+async def revoke_shares(run_id: uuid.UUID, s=Depends(user)):
+    """Revoke every share link of this run and end the sessions opened through them."""
+    await _own_run(run_id, s)
+    async with pool().connection() as c:
+        await c.execute("DELETE FROM shares WHERE run_id = %s", (run_id,))
+        await c.execute("DELETE FROM sessions WHERE run_id = %s AND user_id IS NULL", (run_id,))
+
+
 @app.get("/s/{token}")
 async def open_share(token: str, request: Request):
+    """Open a share link; a signed-in user keeps their own session instead of being switched to the read-only one."""
     async with pool().connection() as c:
         row = await (await c.execute("SELECT run_id FROM shares WHERE token_hash = %s AND expires_at > now()",
                                      (auth.token_hash(token),))).fetchone()
         if not row:
             raise HTTPException(404, "ссылка истекла или отозвана")
         resp = RedirectResponse(f"/runs/{row['run_id']}", 303)
-        await _login(c, None, None, request, resp, run_id=row["run_id"], days=1)
+        try:
+            signed_in = (await auth.current(request, pool()))["user_id"] is not None
+        except HTTPException:
+            signed_in = False
+        if not signed_in:
+            await _login(c, None, None, request, resp, run_id=row["run_id"], days=1)
     return resp
 
 
@@ -808,7 +881,8 @@ async def export_html(run_id: uuid.UUID, request: Request, s=Depends(session)):
     """Self-contained HTML report (checks + verdict + clusters) with links back into the application."""
     rep, row = await _report(run_id, s)
     async with pool().connection() as c:
-        rows = await (await c.execute("""SELECT DISTINCT ON (check_id) check_id, label, rows, error FROM check_results
+        rows = await (await c.execute("""SELECT DISTINCT ON (check_id) check_id, check_sha, label, rows, error
+                                         FROM check_results
                                          WHERE run_id = %s ORDER BY check_id, created_at DESC""", (run_id,))).fetchall()
     base = str(request.base_url).rstrip("/")
     html = await asyncio.to_thread(export.render, rep, row, rows, base)
@@ -820,9 +894,11 @@ async def export_html(run_id: uuid.UUID, request: Request, s=Depends(session)):
 
 @app.get("/metrics")
 async def metrics(request: Request):
-    """Prometheus metrics; protected by ``DD_METRICS_TOKEN`` (Bearer) when it is set."""
+    """Prometheus metrics behind ``DD_METRICS_TOKEN`` (Bearer); disabled while the token is not set."""
     token = os.environ.get("DD_METRICS_TOKEN")
-    if token and request.headers.get("authorization") != f"Bearer {token}":
+    if not token:
+        raise HTTPException(404, "метрики отключены: задайте DD_METRICS_TOKEN")
+    if not hmac.compare_digest(request.headers.get("authorization", "").encode(), f"Bearer {token}".encode()):
         raise HTTPException(401, "нужен токен метрик")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 

@@ -48,7 +48,7 @@ def build(chunk_dirs, out_path, report_params=None, facts_max_values=200, thread
     tmp.unlink(missing_ok=True)
     report_params = report_params or {}
     multi = report_params.get("multi_valued", {})
-    con = duckdb.connect(str(tmp), config={"threads": threads, "memory_limit": memory_limit})
+    con = duckdb.connect(str(tmp), config={"threads": threads, "async_threads": 0, "memory_limit": memory_limit})
     try:
         m, p, s, i = (_list(chunk_dirs, n) for n in ("mart", "paths", "segments", "issues"))
         con.execute(f"""

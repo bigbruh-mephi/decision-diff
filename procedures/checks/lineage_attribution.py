@@ -54,11 +54,11 @@ def _donor_test(mart, input_led, stage_of, p):
     """Split input-led apps into explained / mixed by comparing changed logic values with BEFORE donors."""
     tests, keys = {}, {}
     for app, rs in input_led.items():
-        inp = sorted((r["PATH"], _num(r["VALUE_AFTER"])) for r in rs
-                     if stage_of(r["PATH"])[2] == "input" and _num(r["VALUE_AFTER"]) is not None)
+        inp = sorted((path, _num(va)) for path, _, va, _ in rs
+                     if stage_of(path)[2] == "input" and _num(va) is not None)
         keys[app] = inp[0] if inp else None
-        tests[app] = [(r["PATH"], r["ARRAY_KEY"], r["VALUE_AFTER"]) for r in rs
-                      if stage_of(r["PATH"])[2] == "logic" and r["CHANGE_TYPE"] == "VALUE_CHANGED"]
+        tests[app] = [(path, ak, va) for path, ak, va, ct in rs
+                      if stage_of(path)[2] == "logic" and ct == "VALUE_CHANGED"]
     logic_paths = sorted({t[0] for ts in tests.values() for t in ts})
     before, levels = {}, {}
     for r in mart.rows(path=logic_paths) if logic_paths else ():
@@ -96,11 +96,11 @@ def run(mart, params=None):
 
     changed = {}
     for r in mart.rows(diff_flag=1):
-        changed.setdefault(r["APP_ID"], []).append(r)
+        changed.setdefault(r["APP_ID"], []).append((r["PATH"], r["ARRAY_KEY"], r["VALUE_AFTER"], r["CHANGE_TYPE"]))
     flipped = set(mart.app_ids(path=p["decision_path"], diff_flag=1))
     groups, input_led = {}, {}
     for app, rs in changed.items():
-        first = min(stage_of(r["PATH"]) for r in rs)
+        first = min(stage_of(r[0]) for r in rs)
         if first[2] == "input":
             input_led[app] = rs
         else:

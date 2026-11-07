@@ -2,9 +2,19 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge, Bar, Card, CardHeader, ChangeGlyph, Empty, ErrorBox, Mono, Skeleton, Stat, cx } from "../../components/ui";
 import { api, scopeQuery, type Attribute, type CheckResult, type Cluster, type Scope, type SegmentField, type Summary } from "../../lib/api";
-import { n, pct, rate, tail } from "../../lib/format";
+import { n, pct, plural, rate, tail } from "../../lib/format";
 import { useScopeNav } from "../Run";
 import { AiOpinion } from "./AiOpinion";
+
+const ISSUE: Record<string, string> = {
+  key_collision: "совпали ключи после приведения стиля",
+  duplicate_key: "повторный ключ элемента массива",
+  missing_key_field: "нет поля ключа в элементе массива",
+  non_object_in_keyed_array: "не объект в массиве с ключом",
+  container_in_value_array: "вложенная структура в массиве значений",
+  app_missing_in_slice: "заявки нет в одном из срезов",
+  float_beyond_int64: "число вне диапазона int64",
+};
 
 function SwapMatrix({ s, onCell }: { s: Summary; onCell: (b: string, a: string) => void }) {
   const before = [...new Set(s.swap.map((x) => x.before))].sort();
@@ -35,7 +45,7 @@ function SwapMatrix({ s, onCell }: { s: Summary; onCell: (b: string, a: string) 
                     onClick={() => onCell(b, a)}
                     className={cx("num w-full rounded px-2 py-1.5 text-right", flip ? "font-semibold hover:ring-1 hover:ring-accent" : "text-muted hover:bg-surface-2")}
                     style={flip && v ? { background: `color-mix(in oklch, var(--accent) ${8 + (v / max) * 30}%, transparent)` } : undefined}
-                    title={flip ? `${b} → ${a}: ${v} заявок` : "решение не изменилось"}
+                    title={flip ? `${b} → ${a}: ${plural(v, "заявка", "заявки", "заявок")}` : "решение не изменилось"}
                   >
                     {n(v)}
                     <span className="block text-[11px] font-normal text-muted">{pct(v, s.apps)}</span>
@@ -70,10 +80,10 @@ function ClusterTable({ clusters, total, onOpen, onTransition }: { clusters: Clu
               <td className="px-4 py-2">
                 {c.cid ? (
                   <button onClick={() => onOpen(c.cid!)} className="font-medium text-accent hover:underline">
-                    <span className="whitespace-nowrap">№{c.cid} · {c.paths?.length} атрибутов</span>
+                    №{c.cid} · {tail(c.transitions?.[0]?.path ?? c.paths?.[0] ?? "")}{(c.paths?.length ?? 0) > 1 ? ` и ещё ${c.paths!.length - 1}` : ""}
                   </button>
                 ) : (
-                  <span className="text-muted">ещё {c.clusters} кластеров</span>
+                  <span className="text-muted">ещё {plural(c.clusters ?? 0, "кластер", "кластера", "кластеров")}</span>
                 )}
                 <div className="mt-1 w-28"><Bar total={total} parts={[{ value: c.apps, className: "bg-accent", label: "заявок" }]} /></div>
               </td>
@@ -216,13 +226,30 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
       </section>
       <div className="rounded-lg border border-line bg-surface px-4 py-3 text-[13px] leading-relaxed">
         <span className="font-semibold">Вывод. </span>
-        Изменение затрагивает {n(s.changed)} из {n(s.apps)} заявок ({pct(s.changed, s.apps)}); у {n(s.decision_changed)} сменилось решение
+        Изменение затрагивает {n(s.changed)} из {plural(s.apps, "заявки", "заявок", "заявок")} ({pct(s.changed, s.apps)}); у {n(s.decision_changed)} сменилось решение
         {s.swap.filter((x) => x.before !== x.after).map((x) => ` (${x.before}→${x.after}: ${n(x.apps)})`).join(",")}.
-        {top.length > 0 && <> Главные причины: {top.map((c, i) => <span key={c.cid}>{i ? "; " : ""}кластер №{c.cid} — {c.transitions?.[0] ? <Mono>{tail(c.transitions[0].path!)}</Mono> : null} {c.transitions?.[0] ? `${c.transitions[0].before}→${c.transitions[0].after}` : ""} ({n(c.apps)} заявок{c.origin === "input" ? ", входные данные" : ""})</span>)}.</>}
-        {s.changed_same_decision > 0 && <> У {n(s.changed_same_decision)} заявок различия не повлияли на решение.</>}
-        {" "}Проверки: <Badge tone={failHigh ? "fail" : "pass"}>FAIL {failHigh}</Badge> <Badge tone="low">FAIL бледных {failLow}</Badge> <Badge tone="pass">PASS {rows.length - failHigh - failLow}</Badge>
+        {top.length > 0 && <> Главные причины: {top.map((c, i) => <span key={c.cid}>{i ? "; " : ""}кластер №{c.cid} — {c.transitions?.[0] ? <Mono>{tail(c.transitions[0].path!)}</Mono> : null} {c.transitions?.[0] ? `${c.transitions[0].before}→${c.transitions[0].after}` : ""} ({plural(c.apps, "заявка", "заявки", "заявок")}{c.origin === "input" ? ", входные данные" : ""})</span>)}.</>}
+        {s.changed_same_decision > 0 && <> У {plural(s.changed_same_decision, "заявки", "заявок", "заявок")} различия не повлияли на решение.</>}
+        {" "}Строки проверок: <Badge tone={failHigh ? "fail" : "pass"}>FAIL {failHigh}</Badge> <Badge tone="low">FAIL с низкой уверенностью {failLow}</Badge> <Badge tone="pass">PASS {rows.length - failHigh - failLow}</Badge>
         {errors > 0 && <Badge tone="fail">ошибок исполнения: {errors}</Badge>}
       </div>
+      {!!s.issues?.length && (
+        <Card>
+          <CardHeader title="Проблемы разбора ответов" hint="Данные не слиты молча: такие места стоит проверить в профиле нормализации. Клик по примерам открывает заявки" />
+          <ul className="divide-y divide-line">
+            {s.issues.map((i) => (
+              <li key={i.kind} className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5 text-[13px]">
+                <span>
+                  <Badge tone="warn">{ISSUE[i.kind] ?? i.kind}</Badge> <span className="num text-muted">{plural(i.apps, "заявка", "заявки", "заявок")}, мест {n(i.rows)}</span>
+                </span>
+                <button className="text-xs text-accent hover:underline" onClick={() => go({ ...scope, apps: i.examples }, "apps")}>
+                  примеры: {i.examples.join(", ")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       <div className="grid gap-4 xl:grid-cols-[1fr_2fr]">
         <Card>
           <CardHeader title="Куда сместились решения" hint="Матрица переходов BEFORE × AFTER; клик по ячейке открывает заявки" />
@@ -230,7 +257,7 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
         </Card>
         <Card>
           <CardHeader title="Кластеры изменений" hint="Заявки с одинаковым набором изменившихся атрибутов: из-за чего сменилось решение" />
-          <ClusterTable clusters={s.clusters} total={s.apps} onOpen={(c) => go({ ...scope, cluster: c })} onTransition={(c) => go({ ...scope, cluster: c.cid! }, "apps")} />
+          <ClusterTable clusters={s.clusters} total={s.apps} onOpen={(c) => go({ ...scope, cluster: c })} onTransition={(c) => go({ ...scope, cluster: c.cid! }, "apps", { path: c.transitions?.[0]?.path })} />
         </Card>
       </div>
       <AiOpinion runId={runId} />

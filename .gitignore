@@ -23,3 +23,6 @@ src/decision_diff/web/
 datasets/*
 !datasets/.gitkeep
 src/web/tsconfig.tsbuildinfo
+
+# checks from the organizer package: local only, never committed
+procedures/checks/check_*.py

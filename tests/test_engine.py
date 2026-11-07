@@ -77,6 +77,22 @@ def test_depth_at_parser_limit_and_clear_error_beyond():
         formats.load_json(deep(1025, 1))
 
 
+def test_xml_yaml_msgpack_depth_at_parser_limit_and_clear_error_beyond():
+    def xml(n):
+        return ("<a>" * n + "1" + "</a>" * n).encode()
+
+    (_, tree), = formats.parse("x.xml", xml(2048))
+    out, _ = flatten(tree, Paths(), Trie())
+    assert len(out) == 1
+    with pytest.raises(formats.FormatError, match="2048"):
+        list(formats.parse("x.xml", xml(2049)))
+    with pytest.raises(formats.FormatError, match="YAML nesting"):
+        list(formats.parse("x.yaml", b"[" * 5000 + b"]" * 5000))
+    assert list(formats.parse("x.msgpack", b"\x81\xa1a" * 1024 + b"\x01"))
+    with pytest.raises(formats.FormatError, match="1024"):
+        list(formats.parse("x.msgpack", b"\x81\xa1a" * 1025 + b"\x01"))
+
+
 def test_formats_land_in_the_same_tree():
     import msgpack
     import yaml
@@ -161,3 +177,9 @@ def test_manifest_cannot_point_outside_the_run_folder(tmp_path):
         (run / "manifest.json").write_text(json.dumps({"srez": {"BEFORE": {"dir": bad}, "AFTER": {"dir": "RESULTS/AFTER"}}}))
         with pytest.raises(FileNotFoundError, match="inside the run folder"):
             ingest.slice_dirs(run)
+
+
+def test_declaration_resolves_module_level_literal_params():
+    code = 'DEFAULTS = {"min_share": 0.05}\n\ndef run(mart, params=None):\n    return []\n\n' \
+           'CHECK = {"id": "c", "label": "c", "params": DEFAULTS, "entrypoint": run}\n'
+    assert procedures.declaration(code)[1] == {"id": "c", "label": "c", "params": {"min_share": 0.05}}
