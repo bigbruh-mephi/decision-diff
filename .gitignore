@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+# Agent working files (handoff, tasks, runs, reports)
+agent-dump/
+
+# Task materials and organizer-only reference data — never publish
+artefacts/
