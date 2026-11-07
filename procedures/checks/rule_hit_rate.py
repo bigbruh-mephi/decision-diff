@@ -26,7 +26,7 @@ def run(mart, params=None):
         if not moved:
             continue
         delta = (len(a) - len(b)) / total if total else 0.0
-        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": f"{name}: {len(b)} -> {len(a)} apps",
+        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": f"{name}: заявок {len(b)} -> {len(a)}",
                      "CNT": len(moved), "TOTAL": total, "METRIC": round(delta, 4),
                      "APP_IDS": moved[:p["app_ids_limit"]],
                      "RESULT": "FAIL" if abs(delta) >= p["min_delta"] else "PASS",

@@ -11,7 +11,7 @@ import {
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
-import { Button, Skeleton } from "./components/ui";
+import { Button, ErrorBox, Skeleton } from "./components/ui";
 import { ApiError, api, type Me } from "./lib/api";
 import { AppDetailPage } from "./pages/AppDetail";
 import { LoginPage } from "./pages/Login";
@@ -42,6 +42,7 @@ function Shell() {
   const [theme, toggle] = useTheme();
   const nav = useNavigate();
   if (me.isLoading) return <Skeleton rows={6} />;
+  if (me.error && !(me.error instanceof ApiError && me.error.status === 401)) return <ErrorBox title="Приложение недоступно." error={me.error} />;
   if (me.error) return <LoginPage />;
   const shareOnly = !me.data?.user_id;
   return (

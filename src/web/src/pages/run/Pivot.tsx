@@ -116,6 +116,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
         <CardHeader title="Поля" hint="Перетащите в строки, колонки или фильтры" />
         <div className="flex flex-wrap gap-1 p-3">
           {fields.isLoading && <Skeleton rows={3} />}
+          {fields.error && <ErrorBox inline error={fields.error} />}
           {all.filter((f) => !used.has(f)).map((f) => (
             <Chip key={f} name={f} onDragStart={() => setDrag({ name: f })} />
           ))}
@@ -181,7 +182,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
             actions={pivot.data && <Badge>{plural(pivot.data.cells.length, "ячейка", "ячейки", "ячеек")} · {pivot.data.ms} мс сервер{pivot.isFetching ? " · обновление…" : ""}</Badge>}
           />
           {pivot.error && <ErrorBox error={pivot.error} />}
-          {!table && <Skeleton rows={8} />}
+          {!table && !pivot.error && <Skeleton rows={8} />}
           {table && (
             <div className="max-h-[70vh] overflow-auto">
               <table className="w-full border-collapse text-[12.5px]">

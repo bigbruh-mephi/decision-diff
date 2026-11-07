@@ -27,7 +27,8 @@ def detect(name, data):
     low = name.lower()
     if low.endswith(PICKLE_EXT) or (data[:1] == b"\x80" and data[1:2] in (b"\x02", b"\x03", b"\x04", b"\x05")
                                     and not low.endswith((".msgpack", ".mpk"))):
-        raise FormatError(f"{name}: pickle is not accepted (it executes code when loaded); export to Parquet or CSV")
+        raise FormatError(f"{name}: формат pickle не принимается (при чтении он исполняет код); выгрузите данные "
+                          "в Parquet или CSV")
     for magic, fmt in ((GZIP, "gzip"), (ZSTD, "zstd"), (ZIP, "zip"), (PARQUET, "parquet"), (ARROW, "arrow")):
         if data.startswith(magic):
             return fmt
@@ -60,8 +61,8 @@ def load_json(data):
         if "Integer exceeds 64-bit range" in str(e):
             return json.loads(data)
         if "recursion" in str(e).lower() or "depth" in str(e).lower():
-            raise FormatError(f"nesting deeper than 1024 levels is not supported: {e}") from e
-        raise FormatError(f"invalid JSON: {e}") from e
+            raise FormatError(f"вложенность JSON глубже 1024 уровней (предел парсера orjson): {e}") from e
+        raise FormatError(f"некорректный JSON: {e}") from e
 
 
 def _xml_tree(data, array_tags):
@@ -74,8 +75,8 @@ def _xml_tree(data, array_tags):
         root = etree.fromstring(data, parser)
     except etree.XMLSyntaxError as e:
         if "depth" in str(e).lower():
-            raise FormatError(f"XML nesting is deeper than the parser limit (libxml2): {e}") from e
-        raise FormatError(f"invalid XML: {e}") from e
+            raise FormatError(f"вложенность XML глубже предела парсера libxml2: {e}") from e
+        raise FormatError(f"некорректный XML: {e}") from e
 
     def attrs(el):
         return {"@" + k: v for k, v in el.attrib.items()}
@@ -121,7 +122,7 @@ def parse(name, data, id_field=None, xml_array_tags=()):
         yield from parse(name.removesuffix(".zst"), zstandard.ZstdDecompressor().decompress(
             data, max_output_size=1 << 31), id_field, xml_array_tags)
     elif fmt == "zip":
-        raise FormatError(f"{name}: nested zip archives are not supported")
+        raise FormatError(f"{name}: вложенные zip-архивы не поддерживаются, распакуйте их")
     elif fmt == "json":
         yield stem, load_json(data)
     elif fmt == "ndjson":
@@ -134,10 +135,10 @@ def parse(name, data, id_field=None, xml_array_tags=()):
         try:
             doc = yaml.safe_load(data)
         except yaml.YAMLError as e:
-            raise FormatError(f"invalid YAML: {e}") from e
+            raise FormatError(f"некорректный YAML: {e}") from e
         except RecursionError as e:
-            raise FormatError(f"YAML nesting is deeper than the parser limit (PyYAML is recursive: about "
-                              f"{sys.getrecursionlimit() // 2} levels)") from e
+            raise FormatError(f"вложенность YAML глубже предела парсера PyYAML (он рекурсивный: около "
+                              f"{sys.getrecursionlimit() // 2} уровней)") from e
         yield stem, doc
     elif fmt in ("csv", "tsv"):
         text = data.decode("utf-8-sig")
@@ -149,9 +150,9 @@ def parse(name, data, id_field=None, xml_array_tags=()):
         try:
             doc = msgpack.unpackb(data, raw=False, strict_map_key=False)
         except msgpack.StackError as e:
-            raise FormatError("MessagePack nesting is deeper than the parser limit (msgpack, 1024 levels)") from e
+            raise FormatError("вложенность MessagePack глубже предела парсера msgpack (1024 уровня)") from e
         except ValueError as e:
-            raise FormatError(f"invalid MessagePack: {e}") from e
+            raise FormatError(f"некорректный MessagePack: {e}") from e
         yield stem, doc
     else:
         import pyarrow as pa

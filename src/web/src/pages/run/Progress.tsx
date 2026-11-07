@@ -1,11 +1,11 @@
 import { Card, CardHeader } from "../../components/ui";
 import type { Run } from "../../lib/api";
-import { STATE, n, pct, plural } from "../../lib/format";
+import { EVENT, STATE, eventText, n, pct, plural } from "../../lib/format";
 
 const STEPS: { state: Run["state"][]; label: string }[] = [
   { state: ["receiving"], label: "Приём и нарезка порций" },
   { state: ["sealed"], label: "Приведение и сравнение порций" },
-  { state: ["finalizing"], label: "Сборка витрины, фактов counts и автопроверки" },
+  { state: ["finalizing"], label: "Сборка витрины, фактов (counts) и автопроверки" },
   { state: ["done"], label: "Отчёт готов" },
 ];
 
@@ -65,12 +65,12 @@ export function Progress({ run, live }: { run: Run; live: { type: string; data: 
         </div>
       </Card>
       <Card>
-        <CardHeader title="События" hint="Поток SSE, восстанавливается после перезагрузки" />
+        <CardHeader title="События" hint="Приходят в реальном времени и восстанавливаются после перезагрузки страницы" />
         <ul className="max-h-80 space-y-1 overflow-y-auto p-3 font-mono text-[11.5px]">
           {[...live].reverse().slice(0, 80).map((e, i) => (
             <li key={i} className="flex gap-2">
-              <span className="text-accent">{e.type}</span>
-              <span className="truncate text-muted">{e.type === "chunk.done" ? `#${e.data.chunk_no} · ${plural(Number(e.data.apps), "заявка", "заявки", "заявок")} · ${e.data.changed_apps} с различиями` : JSON.stringify(e.data)}</span>
+              <span className="shrink-0 text-accent" title={e.type}>{EVENT[e.type] ?? e.type}</span>
+              <span className="truncate text-muted">{eventText(e.type, e.data)}</span>
             </li>
           ))}
           {!live.length && <li className="text-muted">ожидание событий…</li>}

@@ -43,6 +43,44 @@ export const CHUNK_STATE: Record<string, string> = {
   cancelled: "отменена",
 };
 
+export const KIND: Record<string, string> = {
+  normalize: "нормализация",
+  compare: "сравнение",
+  segments: "разрезы",
+  facts: "факты",
+  check: "автопроверка",
+  lineage: "цепочка решения",
+  whatif: "что если",
+  cell: "ячейка",
+};
+
+export const EVENT: Record<string, string> = {
+  "run.created": "прогон создан",
+  "ingest.started": "прием порции начат",
+  "ingest.done": "порция принята",
+  "run.sealed": "прием завершен",
+  "chunk.done": "порция обработана",
+  "chunk.failed": "ошибка порции",
+  "finalize.started": "сборка отчета",
+  "run.done": "прогон готов",
+  "run.failed": "прогон завершился с ошибкой",
+  "run.cancelled": "прогон отменен",
+  "check.queued": "проверка в очереди",
+  "check.done": "проверка выполнена",
+  "ai.done": "мнение ИИ готово",
+};
+
+/** One readable line for a run event; the error (already in Russian from the API) wins over raw fields. */
+export const eventText = (type: string, d: Record<string, unknown>) => {
+  if (d.error) return `${d.check_id ? `${d.check_id}: ` : d.chunk_no != null ? `№${d.chunk_no}: ` : ""}${d.error}`;
+  if (type === "chunk.done") return `№${d.chunk_no} · ${plural(Number(d.apps), "заявка", "заявки", "заявок")} · с различиями ${n(Number(d.changed_apps))}`;
+  if (type === "ingest.done") return `${plural(Number(d.chunks), "порция", "порции", "порций")} · ${plural(Number(d.apps), "заявка", "заявки", "заявок")}`;
+  if (type === "run.done") return `${plural(Number(d.apps), "заявка", "заявки", "заявок")} · с различиями ${n(Number(d.changed_apps))}`;
+  if (type === "finalize.started") return plural(Number(d.chunks), "порция", "порции", "порций");
+  if (type === "check.done") return `${d.check_id ?? ""}: без ошибок`;
+  return "";
+};
+
 export const tail = (path: string, k = 3) => {
   const parts = path.split(".");
   return parts.length > k ? "…" + parts.slice(-k).join(".") : path;

@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, CardHeader, ErrorBox, Field, Skeleton, inputCls } from "../components/ui";
 import { api, type Config, type Dataset, type Procedure, type Run, type Selection } from "../lib/api";
-import { dt, n, plural } from "../lib/format";
+import { KIND, dt, n, plural } from "../lib/format";
 
 const STAGES: { kind: "normalize" | "compare" | "segments"; title: string; hint: string }[] = [
   { kind: "normalize", title: "Приведение (нормализация)", hint: "Ключи массивов, исключения, бакеты, переименования" },
@@ -60,6 +60,7 @@ function ParamsEditor({ id, name, value, onChange, onValid }: { id: string; name
         {error ? <Badge tone="fail">ошибка JSON</Badge> : changed.length ? <Badge tone="accent">изменено: {changed.join(", ")}</Badge> : <Badge>по умолчанию</Badge>}
       </summary>
       {proc.isLoading && <Skeleton rows={2} />}
+      {proc.error && <ErrorBox inline error={proc.error} />}
       {proc.data && (
         <div className="flex flex-col gap-1 py-2">
           <textarea
@@ -169,6 +170,7 @@ export function NewRunPage() {
   });
 
   if (procs.isLoading || datasets.isLoading) return <Skeleton rows={8} />;
+  if (procs.error || datasets.error) return <ErrorBox title="Не удалось загрузить процедуры и датасеты." error={procs.error ?? datasets.error} />;
   const ds = datasets.data?.find((d) => d.path === dataset);
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-4">
@@ -234,7 +236,7 @@ export function NewRunPage() {
               </Field>
             ))}
             {(byKind.lineage ?? []).length > 0 && (
-              <Field label="Цепочка этапов (lineage)" hint="Вход → признаки → скоры → порог → правила → решение: для атрибуции «логика или входные данные»">
+              <Field label="Цепочка этапов решения" hint="Вход → признаки → скоры → порог → правила → решение: для атрибуции «логика или входные данные»">
                 <ProcSelect items={byKind.lineage ?? []} value={sel.lineage ?? ""} onChange={(v) => setSel({ ...sel, lineage: v })} />
               </Field>
             )}
@@ -276,7 +278,7 @@ export function NewRunPage() {
                 <ParamsEditor
                   key={id + configId}
                   id={id}
-                  name={`${p.name} · ${p.kind}`}
+                  name={`${p.name} · ${KIND[p.kind] ?? p.kind}`}
                   value={params[id]}
                   onChange={(v) => setParams((cur) => { const next = { ...cur }; if (v) next[id] = v; else delete next[id]; return next; })}
                   onValid={(ok) => setInvalid((cur) => (ok ? cur.filter((x) => x !== id) : [...new Set([...cur, id])]))}

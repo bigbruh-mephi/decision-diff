@@ -133,7 +133,7 @@ def test_new_checks_validate_on_the_open_run(tmp_path):
     finalize.build([d], tmp_path / "run.duckdb", params)
     con = mart.open_run(tmp_path / "run.duckdb")
     m = mart.Mart(con)
-    files = sorted((PROC / "checks").glob("*.py"))
+    files = sorted(f for f in (PROC / "checks").glob("*.py") if not f.name.startswith("check_"))
     assert len(files) == 8
     for f in files:
         chk = procedures.load_file(f, "check")
@@ -153,3 +153,33 @@ def test_pivot_totals_are_distinct_apps(run):
     assert cols["BEFORE"] == 13 < sum(v for (_, src), v in cells.items() if src == "BEFORE")
     assert res["total"] == len(rep.changed) == 13
     rep.con.close()
+
+
+def test_attribution_minimal_reverting_factor_subsets(tmp_path, monkeypatch):
+    """Each flip gets the minimal factor subsets that bring back BEFORE: alone, only together, either, none."""
+    pytest.importorskip("numpy")
+    from decision_diff import whatif
+
+    monkeypatch.setattr(pipeline, "settings", dataclasses.replace(pipeline.settings, sandbox="off"))
+    after = [doc(pd=0.4, decision="REJECT")] * 3 + [doc(cut=0.7, decision="REJECT")] * 2 + \
+            [doc(pd=0.45, cut=0.65, decision="REJECT")] * 2 + [doc(pd=0.55, cut=0.58, decision="REJECT")] + \
+            [doc(decision="REJECT")] + [doc()] * 2
+    params = {"decision_field": "DECISION", "positive_decision": "APPROVE", "lineage": LINEAGE}
+    path = build([(f"A{i:02d}", doc(), a) for i, a in enumerate(after)], tmp_path / "run.duckdb", params)
+    code = WHATIF.replace('"entrypoint": evaluate}', '"factors": {"cut": {"label": "порог", "inputs": ["cut"]}, '
+                          '"score": {"label": "скор", "inputs": ["pd"]}}, "entrypoint": evaluate}')
+    prep = whatif.prepare_factors(str(path), code, str(tmp_path / "cache"))
+    assert whatif.attribute(code, "t", prep, str(tmp_path / "attribution.json")) == {"flips": 9, "causes": 5}
+    rep = RunReport(path, params)
+    got = {c["key"]: (c["label"], [rep.app_id[i] for i in c["apps"]]) for c in rep.causes}
+    assert got == {"score": ("скор", ["A00", "A01", "A02"]), "cut": ("порог", ["A03", "A04"]),
+                   "cut+score": ("порог + скор", ["A05", "A06"]), "cut|score": ("порог или скор", ["A07"]),
+                   "unreproduced": ("процедура не воспроизводит решение", ["A08"])}
+    for c in rep.cluster_rows({}):
+        assert sum(x["apps"] for x in c["causes"]) == c["decision_changed"]
+    assert len(rep.scope({"cause": {"key": "cut"}})) == 2
+    rep.con.close()
+    con = mart.open_run(path)
+    assert pipeline._with_lineage(con, {"a": "@attribution"}, pipeline._causes(path))["a"]["A05"] == "порог + скор"
+    con.close()
+    assert whatif.prepare_factors(str(path), WHATIF, str(tmp_path / "c2")) is None

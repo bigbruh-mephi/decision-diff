@@ -94,11 +94,11 @@ def run_checks(run_file, check_snaps):
     full lists go to ``check_apps/<sha>.json`` next to the run file for drill-down and app linkage, and the rows keep
     only the check's own ``app_ids_limit`` as a preview.
     """
-    out = []
+    out, causes = [], _causes(run_file)
     for snap in check_snaps:
         t0 = time.time()
         try:
-            chk_id, label, rows, preview = confined(_check_body, (run_file, snap), read=[run_file])
+            chk_id, label, rows, preview = confined(_check_body, (run_file, snap, causes), read=[run_file])
             rows = procedures.validate_check_rows(chk_id, rows)
             _store_app_ids(run_file, snap["sha"], [r["APP_IDS"] for r in rows])
             out.append({"check_id": chk_id, "sha": snap["sha"], "label": label, "started_at": t0,
@@ -119,37 +119,46 @@ def _store_app_ids(run_file, sha, ids):
     tmp.replace(d / f"{sha}.json")
 
 
-def _check_body(run_file, snap):
+def _causes(run_file):
+    """``{app_id: cause label}`` of the run's decision flips from ``attribution.json`` (``{}`` when there is none)."""
+    f = Path(run_file).parent / "attribution.json"
+    return {a: c["label"] for c in orjson.loads(f.read_bytes())["causes"] for a in c["app_ids"]} if f.is_file() else {}
+
+
+def _check_body(run_file, snap, causes):
     chk = _proc({**snap, "kind": "check"})
     preview = chk["params"].get("app_ids_limit", APP_IDS_PREVIEW)
     con = mart.open_run(run_file, threads=1)
     try:
-        params = {**_with_lineage(con, chk["params"]), "app_ids_limit": sys.maxsize}
+        params = {**_with_lineage(con, chk["params"], causes), "app_ids_limit": sys.maxsize}
         rows = chk["entrypoint"](mart.Mart(con), params)
         return chk["id"], chk["label"], rows, preview if isinstance(preview, int) and preview >= 0 else APP_IDS_PREVIEW
     finally:
         con.close()
 
 
-def _with_lineage(con, params):
-    """Replace ``"@lineage"`` param values with the run's lineage param of the same name (stored at finalize)."""
+def _with_lineage(con, params, causes=None):
+    """Replace ``"@lineage"`` param values with the run's lineage param of the same name (stored at finalize) and
+    ``"@attribution"`` with the run's ``{app_id: cause label}`` of decision flips (see :func:`_causes`)."""
+    params = {k: (causes or {}) if v == "@attribution" else v for k, v in params.items()}
     if "@lineage" not in params.values():
         return params
     row = con.execute("SELECT value FROM run_meta WHERE key = 'report_params'").fetchone()
     lineage = orjson.loads(row[0]).get("lineage") if row else None
     missing = [k for k, v in params.items() if v == "@lineage" and k not in (lineage or {})]
     if missing:
-        raise procedures.ProcedureError(f"check needs the run's lineage procedure for params {missing}")
+        raise procedures.ProcedureError(f"проверке нужна цепочка решения (lineage) прогона для параметров "
+                                        f"{', '.join(missing)}: выберите процедуру цепочки при запуске")
     return {k: lineage[k] if v == "@lineage" else v for k, v in params.items()}
 
 
 def run_cell(code, run_file):
     """Execute workspace code in the sandbox with ``mart`` bound to the run; returns stdout, last value, check rows."""
     read = [run_file] if run_file else []
-    return confined(_cell_body, (code, run_file), read=read)
+    return confined(_cell_body, (code, run_file, _causes(run_file) if run_file else {}), read=read)
 
 
-def _cell_body(code, run_file):
+def _cell_body(code, run_file, causes):
     import ast
     import contextlib
     import io
@@ -169,7 +178,7 @@ def _cell_body(code, run_file):
                 res["value"] = _preview(eval(compile(ast.Expression(last.value), "cell", "eval"), env))
             chk = env.get("CHECK")
             if isinstance(chk, dict) and callable(chk.get("entrypoint")) and "mart" in env:
-                rows = chk["entrypoint"](env["mart"], _with_lineage(con, chk.get("params", {})))
+                rows = chk["entrypoint"](env["mart"], _with_lineage(con, chk.get("params", {}), causes))
                 res["check"] = {"id": chk.get("id"), "label": chk.get("label"),
                                 "rows": procedures.validate_check_rows(chk.get("id", "cell"), rows)}
     except Exception as e:

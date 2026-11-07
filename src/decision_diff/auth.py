@@ -9,7 +9,9 @@ import secrets
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
-from fastapi import HTTPException, Request
+from fastapi import Request
+
+from .errors import Problem
 
 COOKIE = "__Host-dd_session"
 SESSION_DAYS = 14
@@ -54,11 +56,11 @@ async def current(request: Request, pool):
     """``{"user_id", "login", "run_id"}`` of the request's session; raises 401 without a valid session."""
     token = request.cookies.get(COOKIE)
     if not token:
-        raise HTTPException(401, "not signed in")
+        raise Problem(401, "not_signed_in", "Вы не вошли в систему: войдите, чтобы продолжить.")
     async with pool.connection() as c:
         row = await (await c.execute("""
             SELECT s.user_id, s.run_id, u.login FROM sessions s LEFT JOIN users u ON u.id = s.user_id
             WHERE s.token_hash = %s AND s.expires_at > now()""", (token_hash(token),))).fetchone()
     if row is None:
-        raise HTTPException(401, "session expired")
+        raise Problem(401, "session_expired", "Сессия истекла: войдите снова.")
     return row

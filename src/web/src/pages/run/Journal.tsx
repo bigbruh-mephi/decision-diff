@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { CodeView } from "../../components/CodeView";
 import { Badge, Button, Card, CardHeader, ErrorBox, Mono, Skeleton } from "../../components/ui";
 import { api, type Journal } from "../../lib/api";
-import { CHUNK_STATE, dt, ms, n, plural } from "../../lib/format";
+import { CHUNK_STATE, EVENT, KIND, dt, eventText, ms, n, plural } from "../../lib/format";
 
 const STAGE: Record<string, string> = {
   parse: "Разбор ответов (формат → дерево)",
@@ -11,10 +11,11 @@ const STAGE: Record<string, string> = {
   compare: "Сопоставление BEFORE / AFTER",
   segments: "Слой разрезов",
   write: "Запись порции (Parquet)",
-  finalize: "Сборка витрины, фактов counts и битмапов",
+  finalize: "Сборка витрины, фактов (counts) и индексов",
   checks: "Автопроверки",
   lineage: "Линия принятия решения (роли атрибутов для кластеров)",
-  ai: "AI второе мнение",
+  attribution: "Причины смены решения (контрфакты процедуры «что если»)",
+  ai: "Второе мнение ИИ",
 };
 
 const stageTitle = (s: string) => STAGE[s] ?? (s.startsWith("check:") ? `Автопроверка ${s.slice(6)}` : s);
@@ -27,7 +28,7 @@ function CodeModal({ sha, onClose }: { sha: string; onClose: () => void }) {
         <header className="flex items-center justify-between border-b border-line px-4 py-2.5">
           <div>
             <h2 className="text-[13px] font-semibold">{code.data?.name ?? "Код"}</h2>
-            <p className="text-xs text-muted">версия {sha} · исполнялась именно она · {code.data?.kind}</p>
+            <p className="text-xs text-muted">версия {sha} · исполнялась именно она{code.data ? ` · ${KIND[code.data.kind] ?? code.data.kind}` : ""}</p>
           </div>
           <Button size="sm" onClick={onClose} autoFocus>Закрыть</Button>
         </header>
@@ -66,7 +67,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                 <th className="px-4 py-2 font-medium">Этап</th>
                 <th className="px-2 py-2 font-medium">Выполнений</th>
                 <th className="px-2 py-2 text-right font-medium">Строк вход → выход</th>
-                <th className="px-2 py-2 text-right font-medium">CPU</th>
+                <th className="px-2 py-2 text-right font-medium" title="Суммарное время по всем порциям">Время</th>
                 <th className="w-1/3 px-2 py-2 font-medium">Шкала времени</th>
                 <th className="px-4 py-2 font-medium">Код</th>
               </tr>
@@ -80,10 +81,10 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                     <td className="px-4 py-2">
                       <div className="font-medium">{stageTitle(s.stage)}</div>
                       <Mono className="text-muted">{s.stage}</Mono>
-                      {s.error && <div className="text-xs text-fail">{s.error}</div>}
+                      {s.error && <ErrorBox inline error={s.error} debug={s.error_debug} />}
                     </td>
                     <td className="num px-2 py-2">
-                      {n(s.executions)} {s.failed > 0 && <Badge tone="fail">ошибок {s.failed}</Badge>}
+                      {n(s.executions)} {s.failed > 0 && <Badge tone="fail">{plural(s.failed, "ошибка", "ошибки", "ошибок")}</Badge>}
                     </td>
                     <td className="num px-2 py-2 text-right text-xs">{s.rows_in != null ? n(s.rows_in) : "—"} → {s.rows_out != null ? n(s.rows_out) : "—"}</td>
                     <td className="num px-2 py-2 text-right">{ms(s.cpu_ms)}</td>
@@ -109,14 +110,17 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
             <table className="w-full text-xs">
               <tbody>
                 {chunks.map((c) => (
-                  <tr key={c.chunk_no} className="border-b border-line">
-                    <td className="num px-4 py-1">#{c.chunk_no}</td>
+                  <Fragment key={c.chunk_no}>
+                  <tr className="border-b border-line">
+                    <td className="num px-4 py-1">№{c.chunk_no}</td>
                     <td className="px-2 py-1"><Badge tone={c.state === "done" ? "pass" : c.state === "failed" ? "fail" : "accent"}>{CHUNK_STATE[c.state] ?? c.state}</Badge></td>
                     <td className="num px-2 py-1">{plural(c.apps, "заявка", "заявки", "заявок")}</td>
-                    <td className="num px-2 py-1">{c.attempts > 1 ? <Badge tone="warn">попыток {c.attempts}</Badge> : `попыток ${c.attempts}`}</td>
+                    <td className="num px-2 py-1">{c.attempts > 1 ? <Badge tone="warn">{plural(c.attempts, "попытка", "попытки", "попыток")}</Badge> : plural(c.attempts, "попытка", "попытки", "попыток")}</td>
                     <td className="px-2 py-1 text-muted">{c.worker}</td>
                     <td className="num px-4 py-1 text-right text-muted">{c.started_at && c.finished_at ? ms(new Date(c.finished_at).getTime() - new Date(c.started_at).getTime()) : "…"}</td>
                   </tr>
+                  {c.error && <tr className="border-b border-line"><td colSpan={6} className="px-4 pb-2"><ErrorBox inline error={c.error} debug={c.error_debug} /></td></tr>}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -127,9 +131,9 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
           <ul className="max-h-80 overflow-y-auto font-mono text-[11.5px]">
             {events.map((e) => (
               <li key={e.id} className="flex gap-2 border-b border-line px-4 py-1">
-                <span className="text-muted">{dt(e.ts)}</span>
-                <span className="text-accent">{e.type}</span>
-                <span className="truncate text-muted">{JSON.stringify(e.data)}</span>
+                <span className="shrink-0 whitespace-nowrap text-muted">{dt(e.ts)}</span>
+                <span className="shrink-0 text-accent" title={e.type}>{EVENT[e.type] ?? e.type}</span>
+                <span className="truncate text-muted" title={eventText(e.type, e.data)}>{eventText(e.type, e.data)}</span>
               </li>
             ))}
           </ul>

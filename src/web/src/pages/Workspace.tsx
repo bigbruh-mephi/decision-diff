@@ -3,8 +3,8 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { CodeView } from "../components/CodeView";
 import { Badge, Button, Card, CardHeader, ErrorBox, Mono, inputCls } from "../components/ui";
-import { api, type CellResult, type CheckResult, type Procedure, type Run } from "../lib/api";
-import { dt, plural } from "../lib/format";
+import { ApiError, api, type CellResult, type CheckResult, type Procedure, type Run } from "../lib/api";
+import { KIND, dt, plural } from "../lib/format";
 
 const checkTemplate = () => `# %% Новая автопроверка: контракт CHECK = {id, label, params, entrypoint}
 DEFAULTS = {"min_share": 0.05, "low_confidence_cnt": 5, "app_ids_limit": 20}
@@ -50,12 +50,7 @@ function Output({ res }: { res: CellResult }) {
   return (
     <div className="space-y-2 text-xs">
       {r.stdout && <pre className="max-h-40 overflow-auto rounded bg-surface-2 p-2 font-mono">{r.stdout}</pre>}
-      {r.error && (
-        <pre role="alert" className="max-h-60 overflow-auto rounded border border-fail/40 bg-fail-bg p-2 font-mono text-fail">
-          {r.error}
-          {r.traceback ? "\n" + r.traceback.join("\n") : ""}
-        </pre>
-      )}
+      {r.error && <ErrorBox inline error={r.error} debug={r.error_debug} />}
       {r.value?.type === "table" && r.value.rows && (
         <div className="max-h-80 overflow-auto rounded border border-line">
           <table className="w-full text-[11.5px]">
@@ -91,11 +86,12 @@ export function WorkspacePage() {
   const [current, setCurrent] = useState<Procedure | null>(null);
   const [results, setResults] = useState<Record<number, CellResult>>({});
   const [msg, setMsg] = useState<string | null>(null);
+  const [loadErr, setLoadErr] = useState<unknown>(null);
   useEffect(() => {
     if (!runId && done.length) setRunId(done[0].id);
   }, [done, runId]);
   useEffect(() => {
-    if (proc && proc !== current?.id) api.get<Procedure>(`/api/procedures/${proc}`).then((p) => { setCurrent(p); setCode(p.code ?? ""); setMsg(null); });
+    if (proc && proc !== current?.id) api.get<Procedure>(`/api/procedures/${proc}`).then((p) => { setCurrent(p); setCode(p.code ?? ""); setMsg(null); setLoadErr(null); }, setLoadErr);
   }, [proc]);
   const parts = useMemo(() => cells(code), [code]);
   const runChecks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`), enabled: !!runId });
@@ -105,12 +101,17 @@ export function WorkspacePage() {
   const runCell = async (upto: number) => {
     const text = parts.slice(0, upto + 1).map((c) => c.text).join("\n");
     setResults((r) => ({ ...r, [upto]: { id: "", state: "queued", result: null } }));
-    const { id } = await api.post<{ id: string }>("/api/cells", { code: text, run_id: runId || undefined });
-    for (;;) {
-      const res = await api.get<CellResult>(`/api/cells/${id}`);
-      setResults((r) => ({ ...r, [upto]: res }));
-      if (res.state === "done" || res.state === "failed") break;
-      await new Promise((ok) => setTimeout(ok, 120));
+    try {
+      const { id } = await api.post<{ id: string }>("/api/cells", { code: text, run_id: runId || undefined });
+      for (;;) {
+        const res = await api.get<CellResult>(`/api/cells/${id}`);
+        setResults((r) => ({ ...r, [upto]: res }));
+        if (res.state === "done" || res.state === "failed") break;
+        await new Promise((ok) => setTimeout(ok, 120));
+      }
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      setResults((r) => ({ ...r, [upto]: { id: "", state: "failed", result: { stdout: "", error, error_debug: e instanceof ApiError ? e.debug : null, value: null, check: null } } }));
     }
   };
   const contractCode = () => {
@@ -147,7 +148,7 @@ export function WorkspacePage() {
               <Link to="/workspace" search={{ run: runId || undefined, proc: p.id }} className={"flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-2 " + (current?.id === p.id ? "bg-accent-bg" : "")}>
                 <span aria-hidden>{p.origin === "file" ? "📄" : "✎"}</span>
                 <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                <Badge>{p.kind}</Badge>
+                <Badge>{KIND[p.kind] ?? p.kind}</Badge>
               </Link>
             </li>
           ))}
@@ -174,10 +175,10 @@ export function WorkspacePage() {
           {msg && <p className="border-b border-line bg-pass-bg px-4 py-1.5 text-xs text-pass">{msg}</p>}
           {taken && (
             <p role="status" className="border-b border-line bg-warn-bg px-4 py-1.5 text-xs text-warn">
-              В прогоне уже есть проверка с id <Mono>{checkId}</Mono> («{taken.label}»): при применении её строки в отчёте заменятся строками этого кода. Для новой проверки задайте другой id в CHECK.
+              В прогоне уже есть проверка с идентификатором <Mono>{checkId}</Mono> («{taken.label}»): при применении её строки в отчёте заменятся строками этого кода. Для новой проверки задайте другой "id" в CHECK.
             </p>
           )}
-          {(save.error || addToReport.error) && <ErrorBox error={save.error ?? addToReport.error} />}
+          {(save.error || addToReport.error || !!loadErr) && <ErrorBox error={save.error ?? addToReport.error ?? loadErr} />}
           <div className="p-3">
             <CodeView value={code} onChange={setCode} />
           </div>

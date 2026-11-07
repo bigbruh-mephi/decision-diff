@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { ApiError } from "../lib/api";
 import { CHANGE } from "../lib/format";
 
 export function cx(...c: (string | false | null | undefined)[]) {
@@ -123,10 +124,19 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
   );
 }
 
-export function ErrorBox({ error }: { error: unknown }) {
+/** Russian headline first; the technical text (server debug, traceback of the user's code) only under "Подробности". */
+export function ErrorBox({ error, debug, title, inline }: { error: unknown; debug?: string | null; title?: ReactNode; inline?: boolean }) {
+  const msg = error instanceof Error ? error.message : error ? String(error) : "Неизвестная ошибка";
+  const detail = debug ?? (error instanceof ApiError ? error.debug : null);
   return (
-    <div role="alert" className="m-4 rounded-md border border-fail/40 bg-fail-bg px-3 py-2 text-xs text-fail">
-      {error instanceof Error ? error.message : String(error)}
+    <div role="alert" className={cx(inline ? "mt-1" : "m-4", "rounded-md border border-fail/40 bg-fail-bg px-3 py-2 text-xs text-fail")}>
+      <p>{title && <span className="font-semibold">{title} </span>}{msg}</p>
+      {detail && detail !== msg && (
+        <details className="mt-1">
+          <summary className="cursor-pointer select-none font-medium">Подробности</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px]">{detail}</pre>
+        </details>
+      )}
     </div>
   );
 }

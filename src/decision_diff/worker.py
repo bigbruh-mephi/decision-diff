@@ -145,6 +145,8 @@ class Worker:
                                        "duration_ms": 0, "rows_in": None,
                                        "rows_out": len(((run["report_params"] or {}).get("lineage") or {})
                                                        .get("stages") or [])})
+                    if snaps.get("whatif"):
+                        stages += await self.attribution(run_file, snaps["whatif"])
                     checks = [r for part in await asyncio.gather(*(
                         self.cpu(pipeline.run_checks, str(run_file), [snap]) for snap in snaps["checks"])) for r in part]
                     stages += [{"stage": f"check:{r['check_id']}", "code_sha": r["sha"],
@@ -178,6 +180,23 @@ class Worker:
                 await c.rollback()
                 await c.execute("SELECT pg_advisory_unlock(hashtextextended(%s::text, 9))", (run_id,))
                 await c.commit()
+
+    async def attribution(self, run_file, snap):
+        """Causes of the decision flips over the what-if procedure's factors (before the checks, which may read them);
+        a failure is journaled and the run goes on without causes."""
+        t0, out, error = time.time(), {}, None
+        try:
+            prep = await self.cpu_trusted(whatif.prepare_factors, str(run_file), snap["code"],
+                                          str(run_file.parent / "whatif" / snap["sha"]))
+            if prep is None:
+                return []
+            out = await self.cpu(whatif.attribute, snap["code"], snap["name"], prep,
+                                 str(run_file.parent / "attribution.json"))
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+        return [{"stage": "attribution", "code_sha": snap["sha"], "status": "failed" if error else "done",
+                 "started_at": t0, "duration_ms": (time.time() - t0) * 1000, "rows_in": out.get("flips"),
+                 "rows_out": out.get("causes"), "error": error}]
 
     async def snapshots(self, procs):
         """Attach code to the run's procedure snapshot ``{kind: {sha, params}}`` (checks: list)."""

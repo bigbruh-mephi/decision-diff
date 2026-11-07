@@ -1,6 +1,8 @@
 import dataclasses
 
-from decision_diff import api
+import pytest
+
+from decision_diff import api, errors
 
 
 def _dataset(p, n):
@@ -11,12 +13,17 @@ def _dataset(p, n):
 
 
 def test_listing_hides_other_users_uploads_and_skips_response_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(api, "settings", dataclasses.replace(api.settings, datasets_dir=tmp_path))
-    _dataset(tmp_path / "shared" / "RUN-1", 3)
-    _dataset(tmp_path / "uploads" / "u1" / "abc", 2)
-    _dataset(tmp_path / "uploads" / "u2" / "def", 1)
+    ds, data = tmp_path / "datasets", tmp_path / "data"
+    monkeypatch.setattr(api, "settings", dataclasses.replace(api.settings, datasets_dir=ds, data_dir=data))
+    _dataset(ds / "shared" / "RUN-1", 3)
+    _dataset(ds / "uploads" / "u1" / "legacy", 4)
+    _dataset(data / "uploads" / "u1" / "abc", 2)
+    _dataset(data / "uploads" / "u2" / "def", 1)
     found = api._find_datasets({"user_id": "u1"})
     assert [(d["path"], d["before"], d["after"]) for d in found] == [("shared/RUN-1", 3, 3), ("uploads/u1/abc", 2, 2)]
+    assert api._resolve_dataset("uploads/u1/abc", {"user_id": "u1"}) == (data / "uploads" / "u1" / "abc").absolute()
+    with pytest.raises(errors.Problem):
+        api._resolve_dataset("uploads/u2/def", {"user_id": "u1"})
 
 
 def test_archive_entry_count_and_total_size_are_capped(tmp_path, monkeypatch):
@@ -32,12 +39,14 @@ def test_archive_entry_count_and_total_size_are_capped(tmp_path, monkeypatch):
     dest = tmp_path / "out"
     dest.mkdir()
     monkeypatch.setattr(api, "MAX_ENTRIES", 2)
-    with pytest.raises(HTTPException, match="entries"):
+    with pytest.raises(HTTPException) as e:
         api._safe_extract(z, dest)
+    assert e.value.code == "archive_too_many_files" and e.value.status_code == 413
     monkeypatch.setattr(api, "MAX_ENTRIES", 10)
     monkeypatch.setattr(api, "MAX_UPLOAD", 2500)
-    with pytest.raises(HTTPException, match="size limit"):
+    with pytest.raises(HTTPException) as e:
         api._safe_extract(z, dest)
+    assert e.value.code == "archive_too_large"
     monkeypatch.setattr(api, "MAX_UPLOAD", 3000)
     api._safe_extract(z, dest)
     assert len(list((dest / "RESULTS" / "BEFORE").iterdir())) == 3

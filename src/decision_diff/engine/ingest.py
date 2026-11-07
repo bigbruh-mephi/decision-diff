@@ -10,7 +10,7 @@ from pathlib import Path
 
 import orjson
 
-from .formats import parse
+from .formats import FormatError, parse
 
 
 def read_manifest(run_dir):
@@ -28,12 +28,13 @@ def slice_dirs(run_dir):
         if d:
             target = (root / d).resolve()
             if not target.is_relative_to(root.resolve()) or not target.is_dir():
-                raise FileNotFoundError(f"{root}: manifest slice dir {d!r} must be a folder inside the run folder")
+                raise FileNotFoundError(f"{root.name}: папка среза {d!r} из manifest.json должна лежать внутри "
+                                        "папки прогона")
             found[side] = target
         else:
             hits = sorted((root / "RESULTS").glob(f"{side}*")) or sorted(root.glob(f"{side}*"))
             if not hits:
-                raise FileNotFoundError(f"{root}: no {side} slice directory")
+                raise FileNotFoundError(f"{root.name}: не найдена папка среза {side} (ожидается RESULTS/{side}*)")
             found[side] = hits[0]
     return found["BEFORE"], found["AFTER"]
 
@@ -63,8 +64,11 @@ def read_chunk_zip(data, id_field=None, xml_array_tags=()):
             side, _, name = info.filename.partition("/")
             if info.is_dir() or side not in ("BEFORE", "AFTER"):
                 continue
-            for app_id, tree in parse(name, z.read(info), id_field, xml_array_tags):
-                docs.setdefault(app_id, {})[side] = tree
+            try:
+                for app_id, tree in parse(name, z.read(info), id_field, xml_array_tags):
+                    docs.setdefault(app_id, {})[side] = tree
+            except FormatError as e:
+                raise FormatError(f"файл {info.filename}: {e}") from e
     for app_id in sorted(docs):
         d = docs[app_id]
         yield app_id, d.get("BEFORE"), d.get("AFTER")

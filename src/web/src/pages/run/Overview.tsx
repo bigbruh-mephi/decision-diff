@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge, Bar, Card, CardHeader, ChangeGlyph, Empty, ErrorBox, Mono, Skeleton, Stat, cx } from "../../components/ui";
-import { api, scopeQuery, type Attribute, type CheckResult, type Cluster, type Scope, type SegmentField, type Summary } from "../../lib/api";
+import { api, scopeQuery, type Attribute, type Cause, type CheckResult, type Cluster, type Scope, type SegmentField, type Summary } from "../../lib/api";
 import { n, pct, plural, rate, tail } from "../../lib/format";
 import { useScopeNav } from "../Run";
 import { AiOpinion } from "./AiOpinion";
@@ -60,7 +60,14 @@ function SwapMatrix({ s, onCell }: { s: Summary; onCell: (b: string, a: string) 
   );
 }
 
-function ClusterTable({ clusters, total, onOpen, onTransition }: { clusters: Cluster[]; total: number; onOpen: (c: number) => void; onTransition: (c: Cluster) => void }) {
+const causeTitle = (x: Cause) =>
+  x.key === "other" ? "Ни одна комбинация факторов не возвращает решение BEFORE: причина в других изменениях"
+    : x.key === "unreproduced" ? "Процедура «что если» не воспроизводит решение AFTER у этих заявок"
+      : `Решение возвращается к BEFORE, если восстановить: ${x.label} («+» — только вместе, «или» — хватает любого)`;
+
+const causeText = (c: Cluster) => (c.causes ?? []).map((x) => `${x.label} ${pct(x.apps, c.decision_changed, 0)}`).join(" · ");
+
+function ClusterTable({ clusters, total, onOpen, onTransition, onCause }: { clusters: Cluster[]; total: number; onOpen: (c: number) => void; onTransition: (c: Cluster) => void; onCause: (c: Cluster, x: Cause) => void }) {
   if (!clusters.length) return <Empty title="Различий нет">Ни одна заявка не изменилась.</Empty>;
   return (
     <div className="overflow-x-auto">
@@ -70,6 +77,7 @@ function ClusterTable({ clusters, total, onOpen, onTransition }: { clusters: Clu
             <th className="px-4 py-2 font-medium">Кластер изменений</th>
             <th className="px-2 py-2 text-right font-medium">Заявок</th>
             <th className="px-2 py-2 text-right font-medium">Смена решения</th>
+            <th className="min-w-48 px-2 py-2 font-medium">Причины смены решения</th>
             <th className="px-2 py-2 font-medium">Источник</th>
             <th className="px-4 py-2 font-medium">Что изменилось вместе (главные переходы)</th>
           </tr>
@@ -93,6 +101,21 @@ function ClusterTable({ clusters, total, onOpen, onTransition }: { clusters: Clu
                 {c.swap?.map((s) => (
                   <div key={s.before + s.after} className="text-[11px] text-muted">{s.before}→{s.after}: {n(s.apps)}</div>
                 ))}
+              </td>
+              <td className="px-2 py-2">
+                {c.causes?.length ? (
+                  <ul className="space-y-0.5">
+                    {c.causes.map((x) => (
+                      <li key={x.key}>
+                        <button className="text-left hover:text-accent hover:underline" title={causeTitle(x)} onClick={() => onCause(c, x)}>
+                          {x.label} <span className="num text-[11px] text-muted">{pct(x.apps, c.decision_changed, 0)} · {n(x.apps)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="text-muted">—</span>
+                )}
               </td>
               <td className="px-2 py-2">
                 {c.origin === "input" ? (
@@ -221,14 +244,14 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
         <Stat label="С различиями" value={n(s.changed)} sub={pct(s.changed, s.apps)} tone="accent" onClick={() => go(scope, "apps", { filters: { DIFF_FLAG: ["1"] }, title: "заявки с различиями" })} />
         <Stat label="Сменилось решение" value={n(s.decision_changed)} sub={pct(s.decision_changed, s.apps)} tone="fail" onClick={() => go({ ...scope, seg: { ...scope.seg, [`${s.decision_field}_CHANGED`]: ["1"] } }, "apps")} />
         <Stat label="Различия есть, решение то же" value={n(s.changed_same_decision)} sub={`${pct(s.changed_same_decision, s.changed)} изменений прошли мимо`} />
-        <Stat label="Approval rate" value={s.approval_before == null ? "—" : `${rate(s.approval_before)} → ${rate(s.approval_after)}`} sub={s.approval_before != null && s.approval_after != null ? `${((s.approval_after - s.approval_before) * 100).toFixed(1).replace(".", ",")} п.п.` : undefined} tone={s.approval_after != null && s.approval_before != null && s.approval_after < s.approval_before ? "fail" : undefined} />
+        <Stat label="Доля одобрений (BEFORE → AFTER)" value={s.approval_before == null ? "—" : `${rate(s.approval_before)} → ${rate(s.approval_after)}`} sub={s.approval_before != null && s.approval_after != null ? `${((s.approval_after - s.approval_before) * 100).toFixed(1).replace(".", ",")} п.п.` : undefined} tone={s.approval_after != null && s.approval_before != null && s.approval_after < s.approval_before ? "fail" : undefined} />
         <Stat label="Из-за входных данных" value={n(s.input_driven)} sub="не логика стратегии: возможна ложная тревога" tone={s.input_driven ? "warn" : undefined} onClick={s.input_driven ? () => { const c = s.clusters.find((x) => x.origin === "input"); if (c?.cid) go({ ...scope, cluster: c.cid }); } : undefined} />
       </section>
       <div className="rounded-lg border border-line bg-surface px-4 py-3 text-[13px] leading-relaxed">
         <span className="font-semibold">Вывод. </span>
         Изменение затрагивает {n(s.changed)} из {plural(s.apps, "заявки", "заявок", "заявок")} ({pct(s.changed, s.apps)}); у {n(s.decision_changed)} сменилось решение
         {s.swap.filter((x) => x.before !== x.after).map((x) => ` (${x.before}→${x.after}: ${n(x.apps)})`).join(",")}.
-        {top.length > 0 && <> Главные причины: {top.map((c, i) => <span key={c.cid}>{i ? "; " : ""}кластер №{c.cid} — {c.transitions?.[0] ? <Mono>{tail(c.transitions[0].path!)}</Mono> : null} {c.transitions?.[0] ? `${c.transitions[0].before}→${c.transitions[0].after}` : ""} ({plural(c.apps, "заявка", "заявки", "заявок")}{c.origin === "input" ? ", входные данные" : ""})</span>)}.</>}
+        {top.length > 0 && <> Главные причины: {top.map((c, i) => <span key={c.cid}>{i ? "; " : ""}кластер №{c.cid} — {c.transitions?.[0] ? <Mono>{tail(c.transitions[0].path!)}</Mono> : null} {c.transitions?.[0] ? `${c.transitions[0].before}→${c.transitions[0].after}` : ""} ({plural(c.apps, "заявка", "заявки", "заявок")}{c.origin === "input" ? ", входные данные" : ""}){c.causes?.length ? `, причины смены решения: ${causeText(c)}` : ""}</span>)}.</>}
         {s.changed_same_decision > 0 && <> У {plural(s.changed_same_decision, "заявки", "заявок", "заявок")} различия не повлияли на решение.</>}
         {" "}Строки проверок: <Badge tone={failHigh ? "fail" : "pass"}>FAIL {failHigh}</Badge> <Badge tone="low">FAIL с низкой уверенностью {failLow}</Badge> <Badge tone="pass">PASS {rows.length - failHigh - failLow}</Badge>
         {errors > 0 && <Badge tone="fail">ошибок исполнения: {errors}</Badge>}
@@ -240,7 +263,7 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
             {s.issues.map((i) => (
               <li key={i.kind} className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5 text-[13px]">
                 <span>
-                  <Badge tone="warn">{ISSUE[i.kind] ?? i.kind}</Badge> <span className="num text-muted">{plural(i.apps, "заявка", "заявки", "заявок")}, мест {n(i.rows)}</span>
+                  <Badge tone="warn">{ISSUE[i.kind] ?? i.kind}</Badge> <span className="num text-muted">{plural(i.apps, "заявка", "заявки", "заявок")}, {plural(i.rows, "место", "места", "мест")}</span>
                 </span>
                 <button className="text-xs text-accent hover:underline" onClick={() => go({ ...scope, apps: i.examples }, "apps")}>
                   примеры: {i.examples.join(", ")}
@@ -256,15 +279,15 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
           <SwapMatrix s={s} onCell={(b, a) => go({ ...scope, seg: { ...scope.seg, [`${s.decision_field}_BEFORE`]: [b], [`${s.decision_field}_AFTER`]: [a] } }, "apps")} />
         </Card>
         <Card>
-          <CardHeader title="Кластеры изменений" hint="Заявки с одинаковым набором изменившихся атрибутов: из-за чего сменилось решение" />
-          <ClusterTable clusters={s.clusters} total={s.apps} onOpen={(c) => go({ ...scope, cluster: c })} onTransition={(c) => go({ ...scope, cluster: c.cid! }, "apps", { path: c.transitions?.[0]?.path })} />
+          <CardHeader title="Кластеры изменений" hint="Заявки с одинаковым набором изменившихся атрибутов. Причины: что нужно вернуть из BEFORE, чтобы решение вернулось; клик открывает заявки" />
+          <ClusterTable clusters={s.clusters} total={s.apps} onOpen={(c) => go({ ...scope, cluster: c })} onTransition={(c) => go({ ...scope, cluster: c.cid! }, "apps", { path: c.transitions?.[0]?.path })} onCause={(c, x) => go({ ...scope, cluster: c.cid!, cause: { key: x.key, label: x.label } }, "apps")} />
         </Card>
       </div>
       <AiOpinion runId={runId} />
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader title="Какие атрибуты меняются чаще всего" hint="Точное число заявок; ~ значение, + появился, − исчез" />
-          {attrs.data ? <Attributes rows={attrs.data} onPath={(a) => go(scope, "apps", { cell: { PATH: a.PATH }, filters: { DIFF_FLAG: ["1"] }, title: a.PATH })} /> : <Skeleton />}
+          {attrs.error ? <ErrorBox error={attrs.error} /> : attrs.data ? <Attributes rows={attrs.data} onPath={(a) => go(scope, "apps", { cell: { PATH: a.PATH }, filters: { DIFF_FLAG: ["1"] }, title: a.PATH })} /> : <Skeleton />}
         </Card>
         <Card>
           <CardHeader title="Структурные изменения" hint="Атрибуты появились, исчезли или сменили тип: перекатанные модели, новые правила" />
@@ -290,7 +313,7 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
       </div>
       <Card>
         <CardHeader title="Кого затронуло" hint="Доля смены решения по значениям разрезов; бледные — меньше 100 заявок. Клик сужает отчёт до сегмента" />
-        {segs.data ? <Segments fields={segs.data} onValue={(f, v) => go(seg(f, v))} /> : <Skeleton />}
+        {segs.error ? <ErrorBox error={segs.error} /> : segs.data ? <Segments fields={segs.data} onValue={(f, v) => go(seg(f, v))} /> : <Skeleton />}
       </Card>
     </div>
   );

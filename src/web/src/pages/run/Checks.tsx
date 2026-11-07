@@ -26,12 +26,7 @@ export function ChecksView({ runId }: { runId: string }) {
   return (
     <div className="flex flex-col gap-4">
       {errors.map((c) => (
-        <details key={c.check_id + c.check_sha} role="alert" className="rounded-md border border-fail/40 bg-fail-bg px-3 py-2 text-xs text-fail">
-          <summary className="cursor-pointer">
-            Проверка «{c.label}» не выполнилась: <Mono>{(c.error ?? "").split("\n")[0].slice(0, 200)}</Mono>
-          </summary>
-          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px]">{c.error}</pre>
-        </details>
+        <ErrorBox key={c.check_id + c.check_sha} inline title={`Проверка «${c.label}» не выполнилась.`} error={c.error} debug={c.error_debug} />
       ))}
       <Card>
         <CardHeader

@@ -6,14 +6,17 @@ input are tested against the BEFORE population ("donor test"): for every changed
 value (without an exact match: it must occur at the nearest input value below or above). Passed = the change is explained by input data under the old logic (false alarm for the strategy).
 FAIL rows: input-explained with decision flips, input + unexplained logic change (mixed), and outcome-only changes
 (decision moved with nothing upstream changed). Logic / reference rows PASS: the change is the strategy's own.
+Each row's flips are broken down by the run's counterfactual causes (``"@attribution"``, the what-if factors restored
+from BEFORE), the same numbers as the overview's cluster table.
 """
 
 import bisect
 import re
 from collections import Counter
 
-DEFAULTS = {"stages": "@lineage", "decision_path": "@lineage", "max_levels": 50, "donors": 25,
-            "low_confidence_cnt": 5, "app_ids_limit": 20}
+DEFAULTS = {"stages": "@lineage", "decision_path": "@lineage", "attribution": "@attribution", "max_levels": 50,
+            "donors": 25, "low_confidence_cnt": 5, "app_ids_limit": 20}
+ROLE = {"input": "вход", "reference": "справочник", "logic": "логика", "outcome": "итог"}
 
 
 def _glob(g):
@@ -84,13 +87,14 @@ def _donor_test(mart, input_led, stage_of, p):
 
 def run(mart, params=None):
     p = {**DEFAULTS, **(params or {})}
-    compiled = [(i, s["name"], s["role"], [_glob(g) for g in s["paths"]]) for i, s in enumerate(p["stages"])]
+    compiled = [(i, s.get("label", s["name"]), s["role"], [_glob(g) for g in s["paths"]])
+                for i, s in enumerate(p["stages"])]
     cache = {}
 
     def stage_of(path):
         if path not in cache:
             cache[path] = next(((i, n, r) for i, n, r, gs in compiled if any(g.match(path) for g in gs)),
-                               (len(compiled), "other", "logic"))
+                               (len(compiled), "прочее", "logic"))
         return cache[path]
 
     changed = {}
@@ -103,17 +107,20 @@ def run(mart, params=None):
         if first[2] == "input":
             input_led[app] = rs
         else:
-            groups.setdefault((first[0], f"{first[1]} ({first[2]})", first[2]), set()).add(app)
+            groups.setdefault((first[0], f"{first[1]} ({ROLE.get(first[2], first[2])})", first[2]), set()).add(app)
     explained, mixed = _donor_test(mart, input_led, stage_of, p)
     if explained:
-        groups[(-2, "input: explained by input under BEFORE logic", "input")] = explained
+        groups[(-2, "вход: объясняется входными данными при логике BEFORE", "input")] = explained
     if mixed:
-        groups[(-1, "input + logic change not explained by input", "mixed")] = mixed
+        groups[(-1, "вход + изменение логики, не объяснимое входными данными", "mixed")] = mixed
+    causes = p["attribution"] if isinstance(p["attribution"], dict) else {}
     rows = []
     for (_, label, role), apps in sorted(groups.items()):
         fl = apps & flipped
         fail = role == "outcome" or role == "mixed" or (role == "input" and fl)
-        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": f"{label}; decision flips {len(fl)}",
+        why = Counter(causes[a] for a in fl if a in causes).most_common()
+        arg = f"{label}; смена решения {len(fl)}" + (": " + ", ".join(f"{c} {k}" for c, k in why) if why else "")
+        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": arg,
                      "CNT": len(apps), "TOTAL": len(changed), "METRIC": round(len(fl) / len(apps), 4),
                      "APP_IDS": (sorted(fl) + sorted(apps - fl))[:p["app_ids_limit"]],
                      "RESULT": "FAIL" if fail else "PASS",

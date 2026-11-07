@@ -2,8 +2,10 @@
 
 A *scope* narrows the population: ``{"seg": {field: [values]}, "cluster": cid, "apps": [app ids],
 "check": {"sha", "row"}}`` -> one bitmap (AND across fields and keys, OR within one field); ``check`` is the full
-APP_IDS of one check row, stored by the worker in ``check_apps/<sha>.json`` next to the run file. All blocks accept a scope, so the analyst can zoom from the
-population to a segment, a change cluster, an application and an attribute and back without losing context.
+APP_IDS of one check row, stored by the worker in ``check_apps/<sha>.json`` next to the run file; ``"cause": {"key"}``
+is the decision flips with one cause from ``attribution.json`` (``whatif.attribute``). All blocks accept a scope, so
+the analyst can zoom from the population to a segment, a change cluster, an application and an attribute and back
+without losing context.
 Domain words (which field is the decision, which value is an approval, which paths are input data) come from the
 segments procedure params, never from this code.
 """
@@ -74,6 +76,9 @@ class RunReport:
             bm.add(i)
             per[i] = rows
         self.dir, self.check_ids = Path(path).parent, {}
+        f = self.dir / "attribution.json"
+        self.causes = [{**c, "apps": BitMap(self.app_ord[a] for a in c.pop("app_ids") if a in self.app_ord)}
+                       for c in (orjson.loads(f.read_bytes())["causes"] if f.is_file() else [])]
         self.lock = threading.Lock()
 
     def check_apps(self, sha):
@@ -123,6 +128,8 @@ class RunReport:
         if spec.get("check"):
             rows, k = self.check_apps(str(spec["check"].get("sha"))), spec["check"].get("row")
             bm &= rows[k] if isinstance(k, int) and 0 <= k < len(rows) else BitMap()
+        if spec.get("cause"):
+            bm &= next((c["apps"] for c in self.causes if c["key"] == spec["cause"].get("key")), BitMap())
         return bm
 
     def summary(self, spec):
@@ -167,7 +174,10 @@ class RunReport:
                         "transitions": [{"path": self.attrs[p]["PATH"], "before": vb, "after": va, "apps": n}
                                         for n, p, vb, va in trans],
                         "swap": [{"before": vb, "after": va, "apps": n} for vb, b in self.dec_before.items()
-                                 for va, a in self.dec_after.items() if vb != va and (n := len(b & a & apps))]})
+                                 for va, a in self.dec_after.items() if vb != va and (n := len(b & a & apps))],
+                        "causes": sorted(({"key": x["key"], "label": x["label"], "apps": n}
+                                          for x in self.causes if (n := len(x["apps"] & apps))),
+                                         key=lambda x: -x["apps"])})
         out.sort(key=lambda r: -r["apps"])
         if len(out) > top:
             rest = out[top:]

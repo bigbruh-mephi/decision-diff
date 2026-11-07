@@ -40,17 +40,17 @@ def load(code, name="<workspace>", kind=None):
         raise ProcedureError(f"{name}: {type(e).__name__}: {e}") from e
     spec = getattr(module, "PROCEDURE", None) or getattr(module, "CHECK", None)
     if not isinstance(spec, dict):
-        raise ProcedureError(f"{name}: module must export PROCEDURE or CHECK dict")
+        raise ProcedureError(f"{name}: модуль должен объявить словарь PROCEDURE или CHECK")
     spec = {"kind": "check" if hasattr(module, "CHECK") and not hasattr(module, "PROCEDURE") else None, **spec}
     if kind and spec["kind"] != kind:
-        raise ProcedureError(f"{name}: expected kind {kind!r}, got {spec['kind']!r}")
+        raise ProcedureError(f"{name}: нужна процедура вида {kind!r}, а объявлена {spec['kind']!r}")
     if spec["kind"] not in KINDS:
-        raise ProcedureError(f"{name}: kind must be one of {KINDS}")
+        raise ProcedureError(f"{name}: вид процедуры (kind) должен быть одним из: {', '.join(KINDS)}")
     missing = [k for k in ("id", "label") if not spec.get(k)]
     if missing:
-        raise ProcedureError(f"{name}: missing {missing}")
+        raise ProcedureError(f"{name}: не заполнены поля {', '.join(missing)}")
     if spec["kind"] in ("segments", "facts", "check", "whatif") and not callable(spec.get("entrypoint")):
-        raise ProcedureError(f"{name}: {spec['kind']} procedure needs a callable entrypoint")
+        raise ProcedureError(f"{name}: процедуре вида {spec['kind']!r} нужна функция entrypoint")
     spec.setdefault("params", {})
     spec["code"], spec["sha"] = code, hashlib.sha256(code.encode()).hexdigest()[:16]
     return spec
@@ -65,18 +65,18 @@ def load_file(path, kind=None):
 def validate_check_rows(check_id, rows):
     """Validate check output at the trust boundary; returns normalized rows or raises :class:`ProcedureError`."""
     if not isinstance(rows, list):
-        raise ProcedureError(f"{check_id}: check must return a list of rows, got {type(rows).__name__}")
+        raise ProcedureError(f"{check_id}: проверка должна вернуть список строк, а вернула {type(rows).__name__}")
     out = []
     for i, r in enumerate(rows):
         if not isinstance(r, dict):
-            raise ProcedureError(f"{check_id}: row {i} is not a dict")
+            raise ProcedureError(f"{check_id}: строка {i} результата не является словарем")
         miss = [f for f in CHECK_FIELDS if f not in r]
         if miss:
-            raise ProcedureError(f"{check_id}: row {i} misses {miss}")
+            raise ProcedureError(f"{check_id}: в строке {i} результата нет полей {', '.join(miss)}")
         if r["RESULT"] not in ("PASS", "FAIL") or r["CONFIDENCE"] not in ("HIGH", "LOW"):
-            raise ProcedureError(f"{check_id}: row {i} has RESULT/CONFIDENCE outside PASS|FAIL / HIGH|LOW")
+            raise ProcedureError(f"{check_id}: в строке {i} RESULT должен быть PASS или FAIL, CONFIDENCE - HIGH или LOW")
         if r["SOURCE"] not in ("BEFORE", "AFTER"):
-            raise ProcedureError(f"{check_id}: row {i} SOURCE must be BEFORE or AFTER")
+            raise ProcedureError(f"{check_id}: в строке {i} SOURCE должен быть BEFORE или AFTER")
         out.append({**{f: r[f] for f in CHECK_FIELDS}, "APP_IDS": [str(a) for a in r["APP_IDS"] or []]})
     return out
 
@@ -94,7 +94,7 @@ def declaration(code, name="<workspace>"):
     try:
         tree = ast.parse(code, name)
     except SyntaxError as e:
-        raise ProcedureError(f"{name}:{e.lineno}: {e.msg}") from e
+        raise ProcedureError(f"{name}, строка {e.lineno}: синтаксическая ошибка ({e.msg})") from e
     found, consts = {}, {}
     for node in tree.body:
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
@@ -113,7 +113,7 @@ def declaration(code, name="<workspace>"):
                 consts[node.targets[0].id] = ast.literal_eval(node.value)
     var = "PROCEDURE" if "PROCEDURE" in found else "CHECK" if "CHECK" in found else None
     if var is None:
-        raise ProcedureError(f"{name}: module must assign a literal PROCEDURE or CHECK dict")
+        raise ProcedureError(f"{name}: модуль должен присвоить PROCEDURE или CHECK словарь-литерал {{...}}")
     return var, found[var]
 
 
@@ -126,9 +126,9 @@ def inspect_source(code, name="<workspace>"):
     var, meta = declaration(code, name)
     kind = meta.get("kind") or ("check" if var == "CHECK" else None)
     if kind not in KINDS:
-        raise ProcedureError(f"{name}: kind must be one of {KINDS}")
+        raise ProcedureError(f"{name}: вид процедуры (kind) должен быть одним из: {', '.join(KINDS)}")
     if not isinstance(meta.get("id"), str) or not isinstance(meta.get("label"), str) or not meta["id"] \
             or not meta["label"]:
-        raise ProcedureError(f"{name}: id and label must be string literals")
+        raise ProcedureError(f"{name}: id и label должны быть непустыми строками-литералами")
     return {"kind": kind, "id": meta["id"], "label": meta["label"],
             "sha": hashlib.sha256(code.encode()).hexdigest()[:16]}

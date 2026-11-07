@@ -79,7 +79,8 @@ async def save_workspace(c, owner_id, code, proc_id=None):
 async def snapshot(c, selection, params=None, owner_id=None):
     """Freeze ``{"normalize": id, "compare": id, "segments": id, "checks": [ids]}`` into code shas for a run.
 
-    Only placed files and the owner's own workspace procedures can be selected.
+    Only placed files and the owner's own workspace procedures can be selected. ``whatif`` (attribution of decision
+    flips at finalize) defaults to the procedure the what-if tab opens with: the most recently updated one.
     """
     params = params or {}
 
@@ -88,11 +89,20 @@ async def snapshot(c, selection, params=None, owner_id=None):
                                         AND (origin = 'file' OR owner_id = %s OR %s::uuid IS NULL)""",
                                      (pid, owner_id, owner_id))).fetchone()
         if row is None or row["kind"] != kind:
-            raise procedures.ProcedureError(f"procedure {pid} is not a {kind} procedure")
+            raise procedures.ProcedureError(f"процедура {pid} не найдена или ее вид не {kind!r}: выберите процедуру "
+                                            "из списка заново")
         return {"sha": row["sha"], "params": params.get(str(pid), {})}
 
     snap = {k: await one(selection[k], k) for k in ("normalize", "compare", "segments")}
     if selection.get("lineage"):
         snap["lineage"] = await one(selection["lineage"], "lineage")
+    whatif = selection.get("whatif")
+    if not whatif:
+        row = await (await c.execute("""SELECT id FROM procedures WHERE kind = 'whatif'
+                                        AND (origin = 'file' OR owner_id = %s) ORDER BY updated_at DESC LIMIT 1""",
+                                     (owner_id,))).fetchone()
+        whatif = row and row["id"]
+    if whatif:
+        snap["whatif"] = await one(whatif, "whatif")
     snap["checks"] = [await one(pid, "check") for pid in selection.get("checks", [])]
     return snap

@@ -16,6 +16,9 @@ from the source without executing it. ``entrypoint(data, params)`` returns one o
   procedure via ``pipeline.confined`` for the defaults (fidelity) and the values, checks the returned codes.
 - ``metrics`` (API, no user code): approval rate, swap matrices vs BEFORE / AFTER, fidelity and per-segment deltas
   from the ``RunReport`` bitmaps under a scope.
+- ``prepare_factors`` + ``attribute`` (worker, at finalize): an optional literal ``factors`` section
+  ``{name: {"label", "inputs": [input names]}}`` names what can be restored from BEFORE; every flip gets the minimal
+  factor subsets that revert it, stored in ``attribution.json`` next to the run file (``RunReport.causes``).
 """
 
 import base64
@@ -34,6 +37,7 @@ from . import pipeline
 from .engine import mart, procedures
 
 SLICES = ("AFTER", "BEFORE")
+MAX_FACTORS = 6
 CAST = {"float": "TRY_CAST(v.VALUE AS DOUBLE)", "str": "coalesce(v.VALUE, '')", "bool": "coalesce(v.VALUE = 'true', false)"}
 
 
@@ -41,10 +45,10 @@ def declaration(code, name="<workspace>"):
     """Literal what-if declaration of ``code`` (never executed here)."""
     _, d = procedures.declaration(code, name)
     if d.get("kind") != "whatif":
-        raise procedures.ProcedureError(f"{name}: not a whatif procedure")
+        raise procedures.ProcedureError(f"{name}: это не процедура «что если» (нужен kind: \"whatif\")")
     missing = [k for k in ("unit_depth", "inputs", "outcome", "params") if k not in d]
     if missing:
-        raise procedures.ProcedureError(f"{name}: whatif declaration needs literal {missing}")
+        raise procedures.ProcedureError(f"{name}: в объявлении «что если» не хватает литералов {', '.join(missing)}")
     return d
 
 
@@ -55,22 +59,25 @@ def defaults(decl):
 def _slice(decl, values):
     side = values.get("slice", decl["params"].get("slice", {}).get("default", "AFTER"))
     if side not in SLICES:
-        raise ValueError(f"slice must be one of {SLICES}")
+        raise ValueError(f"срез должен быть одним из: {', '.join(SLICES)}")
     return side
 
 
 def prepare(run_file, code, cache_dir, values):
     """Arrays of the requested slice under ``cache_dir/<slice>`` (built once, atomically); returns its meta."""
     decl = declaration(code)
-    out = Path(cache_dir) / _slice(decl, values)
+    side = _slice(decl, values)
+    return _prepared(run_file, decl, Path(cache_dir) / side, side, (side,))
+
+
+def _prepared(run_file, decl, out, side, unit_sides):
     if not (out / "index.json").exists():
-        _build(run_file, decl, out)
+        _build(run_file, decl, out, side, unit_sides)
     return {**orjson.loads((out / "index.json").read_bytes()), "dir": str(out)}
 
 
-def _build(run_file, decl, out):
+def _build(run_file, decl, out, side, unit_sides):
     d = int(decl["unit_depth"])
-    side = out.name
     tmp = out.with_name(f"{out.name}.tmp{os.getpid()}")
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
@@ -81,25 +88,26 @@ def _build(run_file, decl, out):
             SELECT row_number() OVER (ORDER BY app_ord, ukey) - 1 AS uid, app_ord, ukey FROM (
               SELECT DISTINCT m.app_ord, array_to_string(string_split(m.ARRAY_KEY, '|')[1:{d}], '|') AS ukey
               FROM mart m JOIN attrs t USING (path_id)
-              WHERE t.PATH IN (SELECT unnest(?::VARCHAR[])) AND m.SOURCE = ? AND m.ARRAY_KEY <> ''
-                AND len(string_split(m.ARRAY_KEY, '|')) >= {d})""",
-                    [[i["path"] for i in decl["inputs"].values()], side])
+              WHERE t.PATH IN (SELECT unnest(?::VARCHAR[])) AND m.SOURCE IN (SELECT unnest(?::VARCHAR[]))
+                AND m.ARRAY_KEY <> '' AND len(string_split(m.ARRAY_KEY, '|')) >= {d})""",
+                    [[i["path"] for i in decl["inputs"].values()], list(unit_sides)])
         n_units = con.execute("SELECT count(*) FROM units").fetchone()[0]
         arrays = {"unit_app": np.array([r[0] for r in con.execute("SELECT app_ord FROM units ORDER BY uid").fetchall()],
                                        np.int32)}
         for name, inp in decl["inputs"].items():
-            rows = con.execute(f"""
+            got = con.execute(f"""
                 WITH v AS (SELECT m.app_ord, string_split(m.ARRAY_KEY, '|') AS parts, m.VALUE
                            FROM mart m JOIN attrs t USING (path_id) WHERE t.PATH = ? AND m.SOURCE = ?)
-                SELECT array_to_string(v.parts[{d + 1}:], '|') AS sub, list(u.uid ORDER BY u.uid),
-                       list({CAST[inp["type"]]} ORDER BY u.uid)
+                SELECT array_to_string(v.parts[{d + 1}:], '|') AS sub, u.uid, {CAST[inp["type"]]} AS val
                 FROM v JOIN units u ON u.app_ord = v.app_ord
-                     AND (u.ukey = array_to_string(v.parts[1:{d}], '|') OR len(v.parts) < {d} OR v.parts = [''])
-                GROUP BY ALL""", [inp["path"], side]).fetchall()
+                     AND (u.ukey = array_to_string(v.parts[1:{d}], '|') OR len(v.parts) < {d} OR v.parts = [''])""",
+                              [inp["path"], side]).fetchnumpy()
             dtype, fill = {"float": (np.float64, np.nan), "str": (object, ""), "bool": (bool, False)}[inp["type"]]
-            for sub, uids, vals in rows:
+            subs, vals = np.asarray(got["sub"], object), np.ma.filled(got["val"], fill)
+            for sub in sorted(set(subs.tolist())):
+                pick = subs == sub
                 a = np.full(n_units, fill, dtype)
-                a[np.array(uids, np.int64)] = [fill if v is None else v for v in vals]
+                a[np.ma.getdata(got["uid"])[pick]] = vals[pick]
                 arrays[f"{name}|{sub}" if sub else name] = a.astype(str) if inp["type"] == "str" else a
     finally:
         con.close()
@@ -120,37 +128,54 @@ def _build(run_file, decl, out):
 
 
 def validate(decl, choices, values):
-    """Fill defaults and check each value against its declared type, range and allowed values."""
+    """Fill defaults and check each value against its declared type, range and allowed values; the error names the
+    param by its label (and the key of a map entry), in Russian, for the user."""
     unknown = set(values) - set(decl["params"])
     if unknown:
-        raise ValueError(f"unknown what-if params {sorted(unknown)}")
+        raise ValueError(f"неизвестные параметры «что если»: {', '.join(sorted(unknown))}")
     out = {}
     for name, p in decl["params"].items():
         v = values.get(name, p.get("default"))
         allowed = p.get("values") or choices.get(p.get("values_from") or p.get("keys_from"), [])
-        kind = p.get("type")
+        kind, label = p.get("type"), f"«{p.get('label') or name}»"
+        span = f"нужно число от {p['min']:g} до {p['max']:g}" if kind in ("float", "float_map") else ""
         if kind == "float":
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not p["min"] <= v <= p["max"]:
-                raise ValueError(f"{name}={v!r} must be a number in [{p['min']}, {p['max']}]")
+            if not _in_range(v, p):
+                raise ValueError(f"{label}: значение {v} вне допустимого диапазона, {span}")
             v = float(v)
         elif kind == "bool":
             if not isinstance(v, bool):
-                raise ValueError(f"{name} must be true or false")
+                raise ValueError(f"{label}: нужно true или false")
         elif kind == "enum":
             if v != p.get("default") and (not isinstance(v, str) or v not in allowed):
-                raise ValueError(f"{name}={v!r} not in {allowed}")
+                raise ValueError(f"{label}: значения {v!r} нет среди допустимых ({_few(allowed)})")
         elif kind == "multi":
-            if not isinstance(v, list) or not all(isinstance(x, str) and x in allowed for x in v):
-                raise ValueError(f"{name}: every value must be one of {allowed}")
+            bad = [x for x in v if not isinstance(x, str) or x not in allowed] if isinstance(v, list) else [v]
+            if bad:
+                raise ValueError(f"{label}: значения {bad[0]!r} нет среди допустимых ({_few(allowed)})")
         elif kind == "float_map":
-            if not isinstance(v, dict) or not all(k in allowed and not isinstance(x, bool) and isinstance(x, (int, float))
-                                                  and p["min"] <= x <= p["max"] for k, x in v.items()):
-                raise ValueError(f"{name}: keys must be in {allowed}, values in [{p['min']}, {p['max']}]")
+            if not isinstance(v, dict):
+                raise ValueError(f"{label}: нужен объект {{имя: число}}")
+            for k, x in v.items():
+                if k not in allowed:
+                    raise ValueError(f"{label}: неизвестное имя {k!r}, допустимы: {_few(allowed)}")
+                if not _in_range(x, p):
+                    raise ValueError(f"{label}, {k}: значение {x} вне допустимого диапазона, {span}")
             v = {k: float(x) for k, x in v.items()}
         else:
-            raise ValueError(f"{name}: unknown param type {kind!r}")
+            raise ValueError(f"{label}: неизвестный тип параметра {kind!r} (поддерживаются float, bool, enum, multi, "
+                             "float_map)")
         out[name] = v
     return out
+
+
+def _in_range(x, p):
+    return not isinstance(x, bool) and isinstance(x, (int, float)) and p["min"] <= x <= p["max"]
+
+
+def _few(values, k=8):
+    """``a, b, c и еще 5`` for an error message."""
+    return ", ".join(map(str, values[:k])) + (f" и еще {len(values) - k}" if len(values) > k else "") or "список пуст"
 
 
 def evaluate(code, name, meta, values):
@@ -173,8 +198,7 @@ def evaluate(code, name, meta, values):
             "default_codes": res[0], "codes": res[1], "sandbox_ms": round(ms, 1)}
 
 
-def _evaluate_body(code, name, slice_dir, params_list):
-    spec = procedures.load(code, name, "whatif")
+def _load(spec, slice_dir):
     meta = orjson.loads((Path(slice_dir) / "index.json").read_bytes())
     data = {"n_apps": meta["n_apps"], **{k: {} for k in spec["inputs"]}}
     for key, f in meta["arrays"].items():
@@ -184,12 +208,114 @@ def _evaluate_body(code, name, slice_dir, params_list):
             data[base][sub] = a
         else:
             data[base] = a
+    return data
+
+
+def _codes(spec, data, params):
+    o = np.asarray(spec["entrypoint"](data, params))
+    n = data["n_apps"]
+    if o.shape != (n,) or o.dtype.kind not in "biu" or (o.size and (o.min() < 0 or o.max() > 255)):
+        raise ValueError(f"evaluate must return {n} integer outcome indices, got {o.dtype} {o.shape}")
+    return base64.b64encode(o.astype(np.uint8).tobytes()).decode()
+
+
+def _evaluate_body(code, name, slice_dir, params_list):
+    spec = procedures.load(code, name, "whatif")
+    data = _load(spec, slice_dir)
+    return [_codes(spec, data, params) for params in params_list]
+
+
+def prepare_factors(run_file, code, cache_dir):
+    """Both slices over the union of their units (so one factor's inputs can come from BEFORE while the others stay
+    AFTER), each application's id and its actual outcome index per slice (segments ``<outcome field>_<slice>``);
+    ``None`` when the procedure declares no ``factors``."""
+    decl = declaration(code)
+    if not decl.get("factors"):
+        return None
+    metas = {side: _prepared(run_file, decl, Path(cache_dir) / f"factors-{side}", side, SLICES) for side in SLICES}
+    values, field = decl["outcome"]["values"], decl["outcome"]["field"]
+    cols = ", ".join('"' + f"{field}_{side}".replace('"', '""') + '"' for side in SLICES)
+    con = mart.open_run(run_file, threads=2)
+    try:
+        rows = con.execute(f"SELECT APP_ID, {cols} FROM segments ORDER BY app_ord").fetchall()
+    finally:
+        con.close()
+    index = {v: i for i, v in enumerate(values)}
+    return {"metas": metas, "app_ids": [r[0] for r in rows],
+            "actual": {side: bytes(index.get(r[k + 1], len(values)) for r in rows) for k, side in enumerate(SLICES)}}
+
+
+def attribute(code, name, prep, out_file):
+    """Causes of every decision flip over the declared ``factors`` ``{name: {"label", "inputs"}}``.
+
+    For every subset of factors the procedure re-decides with those factors' inputs taken from BEFORE and all other
+    inputs from AFTER (defaults for params). A subset *reverts* an application when it brings back the BEFORE outcome;
+    the application's cause is the set of its minimal reverting subsets: ``[[a]]`` = factor a alone (every reverting
+    subset contains it), ``[[a, b]]`` = only a and b together, ``[[a], [b]]`` = either one suffices, ``[]`` = no
+    subset reverts (changes outside the factors), ``None`` = the procedure does not reproduce the AFTER outcome.
+    Every flipped application gets exactly one cause. Writes ``out_file``; returns the number of flips and causes.
+    """
+    decl = declaration(code, name)
+    factors = decl.get("factors") or {}
+    if not 0 < len(factors) <= MAX_FACTORS or any(set(f.get("inputs", ())) - set(decl["inputs"]) for f in factors.values()):
+        raise procedures.ProcedureError(f"{name}: factors must be 1..{MAX_FACTORS} entries whose inputs are declared")
+    names, metas = list(factors), prep["metas"]
+    params = validate(decl, metas["AFTER"]["choices"], {})
+    dirs = [metas[side]["dir"] for side in SLICES]
+    t0 = time.perf_counter()
+    res = pipeline.confined(_factors_body, (code, name, dirs, [factors[f]["inputs"] for f in names], params), read=dirs)
+    ms = (time.perf_counter() - t0) * 1000
+    after, before = (np.frombuffer(prep["actual"][side], np.uint8) for side in SLICES)
+    if not isinstance(res, list) or len(res) != 1 << len(names) or not all(isinstance(r, str) for r in res):
+        raise procedures.ProcedureError(f"{name}: sandbox returned an invalid result")
+    codes = np.stack([np.frombuffer(base64.b64decode(r, validate=True), np.uint8) for r in res])
+    if codes.shape[1] != len(after):
+        raise procedures.ProcedureError(f"{name}: evaluate must return {len(after)} outcome indices")
+    key = minimal_subsets(codes == before)
+    flips = np.flatnonzero(after != before)
+    groups = {}
+    for i in flips:
+        groups.setdefault(None if codes[0, i] != after[i] else int(key[i]), []).append(prep["app_ids"][i])
+    labels = [factors[f].get("label", f) for f in names]
+    causes = []
+    for k, ids in sorted(groups.items(), key=lambda g: (g[0] is None, g[0] == 0, -len(g[1]))):
+        sets = None if k is None else [[j for j in range(len(names)) if m >> j & 1] for m in range(1, 1 << len(names))
+                                       if k >> m & 1]
+        causes.append({"key": "unreproduced" if sets is None else "|".join("+".join(names[j] for j in s) for s in sets)
+                       or "other",
+                       "label": "процедура не воспроизводит решение" if sets is None else
+                       " или ".join(" + ".join(labels[j] for j in s) for s in sets) or "изменения вне факторов",
+                       "sets": sets and [[names[j] for j in s] for s in sets], "app_ids": ids})
+    out = Path(out_file)
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(orjson.dumps({"factors": [{"name": f, "label": lb} for f, lb in zip(names, labels)],
+                                  "flips": len(flips), "sandbox_ms": round(ms, 1), "causes": causes}))
+    tmp.replace(out)
+    return {"flips": len(flips), "causes": len(causes)}
+
+
+def minimal_subsets(rev):
+    """Bit ``m`` of each application's key is set when factor subset ``m`` reverts it and no proper subset does;
+    ``rev`` is ``(2**k, n)`` booleans indexed by subset bitmask."""
+    k = rev.shape[0].bit_length() - 1
+    reach, key = rev.copy(), np.zeros(rev.shape[1], np.uint64)
+    for m in range(1, 1 << k):
+        below = np.zeros(rev.shape[1], bool)
+        for j in range(k):
+            if m >> j & 1:
+                below |= reach[m ^ (1 << j)]
+        key |= (rev[m] & ~below).astype(np.uint64) << np.uint64(m)
+        reach[m] |= below
+    return key
+
+
+def _factors_body(code, name, dirs, factor_inputs, params):
+    spec = procedures.load(code, name, "whatif")
+    after, before = (_load(spec, d) for d in dirs)
     out = []
-    for params in params_list:
-        o = np.asarray(spec["entrypoint"](data, params))
-        if o.shape != (meta["n_apps"],) or o.dtype.kind not in "biu" or (o.size and (o.min() < 0 or o.max() > 255)):
-            raise ValueError(f"evaluate must return {meta['n_apps']} integer outcome indices, got {o.dtype} {o.shape}")
-        out.append(base64.b64encode(o.astype(np.uint8).tobytes()).decode())
+    for mask in range(1 << len(factor_inputs)):
+        restored = {i for j, inputs in enumerate(factor_inputs) if mask >> j & 1 for i in inputs}
+        out.append(_codes(spec, {k: before[k] if k in restored else v for k, v in after.items()}, params))
     return out
 
 
@@ -208,7 +334,7 @@ def metrics(rep, res, spec, max_values=50, top=30, max_ids=500):
     """
     s = rep.scope(spec)
     values = res["outcome"]["values"]
-    labels = [*values, "(other)"]
+    labels = [*values, "(прочее)"]
     field = res["outcome"]["field"]
     new = _bitmaps(base64.b64decode(res["codes"]), len(labels))
     dflt = _bitmaps(base64.b64decode(res["default_codes"]), len(labels))

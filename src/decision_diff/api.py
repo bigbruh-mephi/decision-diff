@@ -18,12 +18,12 @@ from pathlib import Path
 
 import orjson
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
-from . import auth, catalog, db, export, queue
+from . import auth, catalog, db, errors, export, queue
 from .engine import procedures
 from .report import ReportCache
 from .settings import settings
@@ -57,13 +57,15 @@ async def lifespan(app):
 _DOCS = os.environ.get("DD_API_DOCS", "0") in ("1", "true", "yes")
 app = FastAPI(title="decision-diff", lifespan=lifespan, docs_url="/api/docs" if _DOCS else None,
               openapi_url="/api/openapi.json" if _DOCS else None)
+errors.install(app)
 
 
 @app.middleware("http")
 async def guard(request: Request, call_next):
     t0 = time.perf_counter()
     if request.url.path.startswith("/api/") and not auth.csrf_ok(request):
-        return Response("cross-site request rejected", 403)
+        return JSONResponse(errors.body(403, "Запрос с другого сайта отклонен (защита от подделки запросов). Откройте "
+                                             "приложение по его адресу и повторите.", "csrf"), 403)
     response = await call_next(request)
     route = request.scope.get("route")
     name = route.path if route else "unmatched"
@@ -85,7 +87,8 @@ async def session(request: Request):
 
 async def user(s=Depends(session)):
     if s["user_id"] is None:
-        raise HTTPException(403, "read-only share link")
+        raise errors.Problem(403, "read_only", "Ссылка на отчет дает доступ только на просмотр. Для этого действия войдите "
+                                                 "под своей учетной записью.")
     return s
 
 
@@ -112,12 +115,12 @@ async def register(body: Credentials, response: Response):
     async with pool().connection() as c:
         n = (await (await c.execute("SELECT count(*) AS n FROM users")).fetchone())["n"]
         if n and not settings_flag("DD_OPEN_REGISTRATION"):
-            raise HTTPException(403, "registration is closed; ask an administrator")
+            raise errors.Problem(403, "registration_closed", "Регистрация закрыта: учетную запись выдает администратор.")
         try:
             row = await (await c.execute("INSERT INTO users (login, password_hash) VALUES (%s, %s) RETURNING id",
                                          (body.login, await _argon(auth.hash_password, body.password)))).fetchone()
         except Exception as e:
-            raise HTTPException(409, "login is taken") from e
+            raise errors.Problem(409, "login_taken", "Этот логин уже занят: выберите другой.", "login") from e
         await c.execute("INSERT INTO audit (user_id, action) VALUES (%s, 'register')", (row["id"],))
         return await _login(c, row["id"], body.login, response)
 
@@ -144,7 +147,7 @@ async def login(body: Credentials, request: Request, response: Response):
                                            FROM audit WHERE action = 'login.failed'
                                            AND ts > now() - interval '15 minutes'""", (body.login, ip))).fetchone()
         if failed["login"] >= 10 or failed["ip"] >= 100:
-            raise HTTPException(429, "too many failed attempts; try again in 15 minutes")
+            raise errors.Problem(429, "too_many_attempts", "Слишком много неудачных попыток входа. Повторите через 15 минут.")
         row = await (await c.execute("SELECT id, password_hash FROM users WHERE login = %s",
                                      (body.login,))).fetchone()
         ok = await _argon(auth.verify_password, row["password_hash"] if row else auth.DUMMY_HASH, body.password)
@@ -152,7 +155,7 @@ async def login(body: Credentials, request: Request, response: Response):
             await c.execute("INSERT INTO audit (action, target, data) VALUES ('login.failed', %s, %s)",
                             (body.login, Jsonb({"ip": ip})))
             await c.commit()
-            raise HTTPException(401, "wrong login or password")
+            raise errors.Problem(401, "wrong_credentials", "Неверный логин или пароль.")
         await c.execute("INSERT INTO audit (user_id, action) VALUES (%s, 'login')", (row["id"],))
         return await _login(c, row["id"], body.login, response)
 
@@ -181,7 +184,8 @@ def _dataset_info(path):
     except FileNotFoundError:
         return None
     man = ingest.read_manifest(path)
-    return {"path": str(path.relative_to(settings.datasets_dir)), "run_id": man.get("run_id", path.name),
+    base = settings.data_dir if path.is_relative_to(settings.data_dir / "uploads") else settings.datasets_dir
+    return {"path": str(path.relative_to(base)), "run_id": man.get("run_id", path.name),
             "applications": man.get("applications"), "before": len(os.listdir(b)),
             "after": len(os.listdir(a)), "excluded": man.get("technical_fields_always_differ", [])}
 
@@ -197,29 +201,36 @@ async def datasets(s=Depends(user)):
     return await asyncio.to_thread(_find_datasets, s)
 
 
+def _dataset_root(rel):
+    """Uploads live on the data volume (writable by the API); placed datasets in the read-only datasets folder."""
+    return settings.data_dir if Path(rel).parts[:1] == ("uploads",) else settings.datasets_dir
+
+
 def _find_datasets(s):
-    """Dataset folders visible to the user; the walk does not descend into a found dataset (its response files)."""
-    root, found = settings.datasets_dir, []
-    for d, dirs, files in os.walk(root):
-        m = Path(d)
-        rel = m.relative_to(root)
-        if rel != Path("uploads") and not _visible(rel, s):
-            dirs.clear()
-        elif m != root and ("manifest.json" in files or "RESULTS" in dirs):
-            dirs.clear()
-            if info := _dataset_info(m):
-                found.append(info)
-        else:
-            dirs.sort()
+    """Placed datasets plus the user's own uploads; the walk does not descend into a found dataset (its files)."""
+    found = []
+    for root, skip in ((settings.datasets_dir, settings.datasets_dir / "uploads"),
+                       (settings.data_dir / "uploads" / str(s["user_id"]), None)):
+        for d, dirs, files in os.walk(root):
+            m = Path(d)
+            if m == skip:
+                dirs.clear()
+            elif m != root and ("manifest.json" in files or "RESULTS" in dirs):
+                dirs.clear()
+                if info := _dataset_info(m):
+                    found.append(info)
+            else:
+                dirs.sort()
     return sorted(found, key=lambda x: x["path"])
 
 
 def _resolve_dataset(rel, s):
     """Dataset folder under the datasets root; ``..``, absolute paths and other users' uploads are rejected."""
     parts = Path(rel).parts
-    p = settings.datasets_dir / rel
+    p = _dataset_root(rel) / rel
     if not rel or Path(rel).is_absolute() or ".." in parts or not p.is_dir() or not _visible(rel, s):
-        raise HTTPException(400, "unknown dataset")
+        raise errors.Problem(400, "unknown_dataset", "Датасет не найден: выберите его из списка или загрузите архив заново.",
+                             "dataset")
     return p.absolute()
 
 
@@ -229,24 +240,31 @@ def _safe_extract(zip_path, dest):
     with zipfile.ZipFile(zip_path) as z:
         members = z.infolist()
         if len(members) > MAX_ENTRIES:
-            raise HTTPException(413, f"archive has more than {MAX_ENTRIES} entries")
+            raise errors.Problem(413, "archive_too_many_files", f"В архиве больше {MAX_ENTRIES} файлов. Разделите данные на "
+                                                                 "несколько архивов и догрузите их порциями.")
         total = 0
         for info in members:
             target = (dest / info.filename).resolve()
             if not target.is_relative_to(dest.resolve()):
-                raise HTTPException(400, f"unsafe path in archive: {info.filename}")
+                raise errors.Problem(400, "archive_unsafe_path", f"Недопустимый путь в архиве: {info.filename}. Соберите "
+                                                                "архив без абсолютных путей и «..».")
             total += info.file_size
         disk = shutil.disk_usage(dest)
         if total > MAX_UPLOAD or total > disk.free - disk.total // 10:
-            raise HTTPException(413, "archive expands beyond the size limit or the free space of the datasets volume")
+            raise errors.Problem(413, "archive_too_large", f"После распаковки архив больше {MAX_UPLOAD >> 30} ГБ или "
+                                                          "не помещается на диск датасетов.")
         z.extractall(dest)
 
 
 @app.post("/api/datasets")
 async def upload_dataset(file: UploadFile, s=Depends(user)):
     """Upload a zip of a run folder (manifest.json + RESULTS/BEFORE*/ + RESULTS/AFTER*/)."""
-    dest = settings.datasets_dir / "uploads" / str(s["user_id"]) / uuid.uuid4().hex[:12]
-    dest.mkdir(parents=True)
+    dest = settings.data_dir / "uploads" / str(s["user_id"]) / uuid.uuid4().hex[:12]
+    try:
+        dest.mkdir(parents=True)
+    except OSError as e:
+        raise errors.Problem(500, "datasets_not_writable", "Сервер не может сохранить архив: папка данных недоступна "
+                                                           "для записи. Сообщите администратору.") from e
     tmp = dest.with_suffix(".zip")
     size = 0
     with tmp.open("wb") as f:
@@ -255,21 +273,31 @@ async def upload_dataset(file: UploadFile, s=Depends(user)):
             if size > MAX_UPLOAD:
                 tmp.unlink()
                 shutil.rmtree(dest)
-                raise HTTPException(413, "upload too large")
+                raise errors.Problem(413, "upload_too_large", f"Файл больше {MAX_UPLOAD >> 30} ГБ. Разделите данные на "
+                                                             "несколько архивов.", "file")
             f.write(chunk)
     try:
         await asyncio.to_thread(_safe_extract, tmp, dest)
     except (zipfile.BadZipFile, HTTPException) as e:
         shutil.rmtree(dest)
-        raise HTTPException(400, str(getattr(e, "detail", e))) from e
+        if isinstance(e, HTTPException):
+            raise
+        raise errors.Problem(400, "bad_zip", "Файл не является ZIP-архивом или поврежден. Загрузите .zip с папкой "
+                                             "прогона.", "file") from e
     finally:
         tmp.unlink(missing_ok=True)
     roots = [m for m in [dest, *dest.rglob("*")] if m.is_dir() and ((m / "manifest.json").exists()
                                                                      or (m / "RESULTS").is_dir())]
     if not roots:
         shutil.rmtree(dest)
-        raise HTTPException(400, "archive has no run folder (manifest.json or RESULTS/)")
-    return await asyncio.to_thread(_dataset_info, roots[0])
+        raise errors.Problem(400, "no_run_folder", "В архиве нет папки прогона: нужен manifest.json или папка "
+                                                   "RESULTS/ с подпапками BEFORE* и AFTER*.", "file")
+    info = await asyncio.to_thread(_dataset_info, roots[0])
+    if info is None:
+        shutil.rmtree(dest)
+        raise errors.Problem(400, "no_slices", "В папке прогона нет срезов: нужны подпапки BEFORE* и AFTER* (в RESULTS/ "
+                                               "или по путям из manifest.json).", "file")
+    return info
 
 
 @app.get("/api/procedures")
@@ -291,7 +319,8 @@ async def get_procedure(pid: uuid.UUID, s=Depends(user)):
             JOIN code_versions v ON v.sha = p.sha WHERE p.id = %s AND (p.origin = 'file' OR p.owner_id = %s)""",
                                      (pid, s["user_id"]))).fetchone()
     if not row:
-        raise HTTPException(404, "procedure not found")
+        raise errors.Problem(404, "procedure_not_found", "Процедура не найдена: возможно, она удалена или принадлежит "
+                                                         "другому пользователю.")
     try:
         declared = procedures.declaration(row["code"])[1].get("params")
     except procedures.ProcedureError:
@@ -318,9 +347,10 @@ async def _save_procedure(code, s, pid):
         async with pool().connection() as c:
             new_id = await catalog.save_workspace(c, s["user_id"], code, pid)
             if not new_id:
-                raise HTTPException(404, "workspace procedure not found")
+                raise errors.Problem(404, "procedure_not_found", "Процедура рабочей области не найдена: сохраните код как "
+                                                                 "новую процедуру.")
     except procedures.ProcedureError as e:
-        raise HTTPException(422, str(e)) from e
+        raise errors.Problem(422, "procedure_invalid", str(e), "code") from e
     return await get_procedure(new_id, s)
 
 
@@ -330,7 +360,7 @@ async def inspect_procedure(body: Code, _=Depends(user)):
     try:
         return procedures.inspect_source(body.code)
     except procedures.ProcedureError as e:
-        return j({"error": str(e)}, 422)
+        raise errors.Problem(422, "procedure_invalid", str(e), "code") from e
 
 
 @app.get("/api/code/{sha}")
@@ -350,7 +380,7 @@ async def code_version(sha: str, s=Depends(user)):
                          WHERE r.owner_id = %(u)s AND x.code_sha = v.sha))""",
                                      {"sha": sha, "u": s["user_id"]})).fetchone()
     if not row:
-        raise HTTPException(404, "code version not found")
+        raise errors.Problem(404, "code_not_found", "Эта версия кода не найдена или недоступна.")
     return j(row)
 
 
@@ -359,6 +389,7 @@ class Selection(BaseModel):
     compare: uuid.UUID
     segments: uuid.UUID
     lineage: uuid.UUID | None = None
+    whatif: uuid.UUID | None = None
     checks: list[uuid.UUID] = []
 
 
@@ -396,7 +427,7 @@ async def update_config(cid: uuid.UUID, body: ConfigBody, s=Depends(user)):
                                      (body.name, body.dataset, Jsonb(body.procedures.model_dump(mode="json")),
                                       Jsonb(body.params), cid, s["user_id"]))).fetchone()
     if not row:
-        raise HTTPException(404, "configuration not found")
+        raise errors.Problem(404, "config_not_found", "Конфигурация не найдена: возможно, ее удалили.")
     return j(row)
 
 
@@ -426,17 +457,19 @@ async def create_run(body: RunBody, s=Depends(user)):
             cfg = await (await c.execute("SELECT * FROM run_configs WHERE id = %s AND owner_id = %s",
                                          (body.config_id, s["user_id"]))).fetchone()
             if not cfg:
-                raise HTTPException(404, "configuration not found")
+                raise errors.Problem(404, "config_not_found", "Конфигурация не найдена: возможно, ее удалили.",
+                                     "config_id")
             sel = sel or Selection(**cfg["procedure_ids"])
             params = {**cfg["params"], **params}
             dataset = dataset or cfg["dataset"]
         if not sel or not dataset:
-            raise HTTPException(422, "dataset and procedures (or a configuration) are required")
+            raise errors.Problem(422, "run_incomplete", "Для запуска нужны датасет и процедуры (или сохраненная "
+                                                     "конфигурация).", "dataset" if sel else "procedures")
         source = _resolve_dataset(dataset, s)
         try:
             snap = await catalog.snapshot(c, sel.model_dump(mode="json"), params, s["user_id"])
         except procedures.ProcedureError as e:
-            raise HTTPException(422, str(e)) from e
+            raise errors.Problem(422, "procedure_invalid", str(e), "procedures") from e
         run_id = await db.create_run(c, s["user_id"], body.name or Path(dataset).name, snap, params, body.config_id)
         if body.seal:
             await c.execute("UPDATE runs SET seal_requested = true WHERE id = %s", (run_id,))
@@ -496,7 +529,12 @@ async def _interactive_slot(c, table, user_id, limit=4):
                                      AND state IN ('queued', 'running')
                                      AND created_at > now() - interval '10 minutes'""", (user_id,))).fetchone()
     if row["n"] >= limit:
-        raise HTTPException(429, "too many executions in progress; wait for the previous ones to finish")
+        raise errors.Problem(429, "too_many_executions", f"Одновременно можно выполнять не больше {limit} запусков: "
+                                                        "дождитесь завершения предыдущих и повторите.")
+
+
+RUN_STATE = {"receiving": "прием данных", "sealed": "обработка", "finalizing": "сборка отчета", "done": "готов",
+             "failed": "завершился с ошибкой", "cancelled": "отменен"}
 
 
 async def _own_run(run_id, s, states=None):
@@ -504,9 +542,12 @@ async def _own_run(run_id, s, states=None):
         row = await (await c.execute("SELECT * FROM runs WHERE id = %s", (run_id,))).fetchone()
     allowed = row and (row["owner_id"] == s["user_id"] or (s["run_id"] and s["run_id"] == row["id"]))
     if not allowed:
-        raise HTTPException(404, "run not found")
+        raise errors.Problem(404, "run_not_found", "Прогон не найден: возможно, он удален или ссылка устарела.",
+                             "run_id")
     if states and row["state"] not in states:
-        raise HTTPException(409, f"run is {row['state']}")
+        need = "завершенного прогона" if "done" in states else "прогона, который еще принимает данные"
+        raise errors.Problem(409, "run_state", f"Действие доступно только для {need}. Сейчас: "
+                                               f"{RUN_STATE.get(row['state'], row['state'])}.")
     return row
 
 
@@ -517,7 +558,7 @@ async def list_runs(s=Depends(user)):
             SELECT id, name, state, apps, total_chunks, done_chunks, failed_chunks, stats, error, created_at,
                    finished_at, config_id FROM runs WHERE owner_id = %s ORDER BY created_at DESC LIMIT 200""",
                                       (s["user_id"],))).fetchall()
-    return j(rows)
+    return j([errors.humanize(r) for r in rows])
 
 
 @app.get("/api/runs/{run_id}")
@@ -528,9 +569,9 @@ async def get_run(run_id: uuid.UUID, s=Depends(session)):
             SELECT state, count(*) AS n, coalesce(sum(apps), 0) AS apps,
                    coalesce(sum((stats->>'changed_apps')::int), 0) AS changed FROM chunks WHERE run_id = %s
             GROUP BY state""", (run_id,))).fetchall()
-    return j({**{k: row[k] for k in ("id", "name", "state", "apps", "total_chunks", "done_chunks", "failed_chunks",
-                                     "stats", "error", "created_at", "sealed_at", "finished_at", "config_id",
-                                     "params", "seal_requested")},
+    return j({**errors.humanize({k: row[k] for k in ("id", "name", "state", "apps", "total_chunks", "done_chunks",
+                                                    "failed_chunks", "stats", "error", "created_at", "sealed_at",
+                                                    "finished_at", "config_id", "params", "seal_requested")}),
               "procedures": row["procedures"], "chunks": chunks})
 
 
@@ -551,7 +592,8 @@ async def journal(run_id: uuid.UUID, s=Depends(session)):
         chunks = await (await c.execute("""SELECT chunk_no, state, apps, attempts, started_at, finished_at, worker,
                                            error FROM chunks WHERE run_id = %s ORDER BY chunk_no""",
                                         (run_id,))).fetchall()
-    return j({"stages": stages, "events": events, "chunks": chunks})
+    return j({"stages": [errors.humanize(x) for x in stages], "chunks": [errors.humanize(x) for x in chunks],
+              "events": [{**e, "data": errors.humanize(e["data"])} for e in events]})
 
 
 @app.get("/api/events")
@@ -583,7 +625,7 @@ async def events(request: Request, run: list[uuid.UUID] | None = None, s=Depends
                                                   (s["user_id"], last))).fetchall()
             for r in rows:
                 last = r["id"]
-                data = orjson.dumps({"run_id": r["run_id"], **r["data"]}, default=str).decode()
+                data = orjson.dumps({"run_id": r["run_id"], **errors.humanize(r["data"])}, default=str).decode()
                 yield f"id: {r['id']}\nevent: {r['type']}\ndata: {data}\n\n"
             idle = 0 if rows else idle + 1
             if idle and idle % 15 == 0:
@@ -597,9 +639,12 @@ async def events(request: Request, run: list[uuid.UUID] | None = None, s=Depends
 async def _report(run_id, s):
     row = await _own_run(run_id, s)
     if row["state"] != "done":
-        raise HTTPException(409, "the report opens when processing is complete")
+        raise errors.Problem(409, "run_not_ready", "Отчет откроется после завершения обработки прогона.")
     path = settings.run_dir(run_id) / "run.duckdb"
     return await asyncio.to_thread(STATE["reports"].get, str(run_id), path, row["report_params"] or {}), row
+
+
+BAD_SCOPE = "Срез отчета в адресе поврежден: откройте отчет заново из списка прогонов."
 
 
 def _scope(request: Request):
@@ -609,9 +654,9 @@ def _scope(request: Request):
     try:
         spec = orjson.loads(raw)
     except orjson.JSONDecodeError as e:
-        raise HTTPException(400, "scope must be JSON") from e
+        raise errors.Problem(400, "bad_scope", BAD_SCOPE, "scope") from e
     if not isinstance(spec, dict):
-        raise HTTPException(400, "scope must be an object")
+        raise errors.Problem(400, "bad_scope", BAD_SCOPE, "scope")
     return spec
 
 
@@ -718,7 +763,7 @@ async def app_detail(run_id: uuid.UUID, app_id: str, s=Depends(session)):
     rep, _ = await _report(run_id, s)
     res = await asyncio.to_thread(rep.app, app_id)
     if res is None:
-        raise HTTPException(404, "application not in this run")
+        raise errors.Problem(404, "app_not_found", f"Заявки {app_id} нет в этом прогоне.")
     async with pool().connection() as c:
         results = await (await c.execute("""SELECT DISTINCT ON (check_id) check_id, check_sha, label, rows
                                             FROM check_results WHERE run_id = %s ORDER BY check_id, created_at DESC""",
@@ -734,7 +779,7 @@ async def checks(run_id: uuid.UUID, s=Depends(session)):
         rows = await (await c.execute("""
             SELECT DISTINCT ON (check_id) check_id, check_sha, label, rows, duration_ms, error, created_at
             FROM check_results WHERE run_id = %s ORDER BY check_id, created_at DESC""", (run_id,))).fetchall()
-    return j(rows)
+    return j([errors.humanize(r) for r in rows])
 
 
 class CheckRunBody(BaseModel):
@@ -750,7 +795,8 @@ async def run_check(run_id: uuid.UUID, body: CheckRunBody, s=Depends(user)):
         row = await (await c.execute("SELECT sha, kind FROM procedures WHERE id = %s AND (origin = 'file' OR "
                                      "owner_id = %s)", (body.procedure_id, s["user_id"]))).fetchone()
         if not row or row["kind"] != "check":
-            raise HTTPException(422, "not a check procedure")
+            raise errors.Problem(422, "not_a_check", "Выбранная процедура не является автопроверкой (нужен CHECK).",
+                                 "procedure_id")
         await db.event(c, run_id, "check.queued", {"sha": row["sha"]})
     await queue.publish(STATE["ch"], queue.INTERACTIVE, {"kind": "check", "run_id": str(run_id),
                                                          "user_id": str(s["user_id"]), "sha": row["sha"],
@@ -769,8 +815,8 @@ async def ai_opinion(run_id: uuid.UUID, s=Depends(session)):
         row = await (await c.execute("SELECT state, model, result FROM ai_opinions WHERE run_id = %s",
                                      (run_id,))).fetchone()
     if not row:
-        raise HTTPException(404, "no AI opinion for this run")
-    return j(row["result"] or {"state": row["state"], "model": row["model"]})
+        raise errors.Problem(404, "ai_not_requested", "Мнение ИИ для этого прогона еще не запрашивалось.")
+    return j(errors.humanize(row["result"]) or {"state": row["state"], "model": row["model"]})
 
 
 @app.post("/api/runs/{run_id}/ai")
@@ -778,7 +824,8 @@ async def rerun_ai(run_id: uuid.UUID, s=Depends(user)):
     """Queue a fresh AI second opinion of a finished run."""
     await _own_run(run_id, s, states=("done",))
     if not settings.llm_enabled:
-        raise HTTPException(409, "LLM is not configured (DD_LLM_BASE_URL, DD_LLM_API_KEY, DD_LLM_MODEL)")
+        raise errors.Problem(409, "llm_disabled", "Языковая модель не подключена: задайте DD_LLM_BASE_URL, "
+                                                  "DD_LLM_API_KEY и DD_LLM_MODEL в .env.")
     async with pool().connection() as c:
         row = await (await c.execute("""
             INSERT INTO ai_opinions (run_id, state, model) VALUES (%s, 'pending', %s)
@@ -821,8 +868,12 @@ async def get_cell(cell_id: uuid.UUID, s=Depends(user)):
         row = await (await c.execute("SELECT * FROM cell_runs WHERE id = %s AND user_id = %s",
                                      (cell_id, s["user_id"]))).fetchone()
     if not row:
-        raise HTTPException(404, "cell run not found")
-    return j(row)
+        raise errors.Problem(404, "cell_not_found", "Запуск ячейки не найден.")
+    res = row["result"]
+    if res and res.get("error"):
+        raw = "\n".join([res["error"], *(res.get("traceback") or [])])
+        res = errors.humanize({**res, "error": raw})
+    return j({**row, "result": res})
 
 
 @app.post("/api/runs/{run_id}/share")
@@ -853,7 +904,8 @@ async def open_share(token: str, request: Request):
         row = await (await c.execute("SELECT run_id FROM shares WHERE token_hash = %s AND expires_at > now()",
                                      (auth.token_hash(token),))).fetchone()
         if not row:
-            raise HTTPException(404, "link expired or revoked")
+            raise errors.Problem(404, "share_expired", "Ссылка на отчет истекла или отозвана: попросите автора прогона "
+                                                       "прислать новую.")
         resp = RedirectResponse(f"/runs/{row['run_id']}", 303)
         try:
             signed_in = (await auth.current(request, pool()))["user_id"] is not None
@@ -885,9 +937,9 @@ async def metrics(request: Request):
     """Prometheus metrics behind ``DD_METRICS_TOKEN`` (Bearer); disabled while the token is not set."""
     token = os.environ.get("DD_METRICS_TOKEN")
     if not token:
-        raise HTTPException(404, "metrics are disabled: set DD_METRICS_TOKEN")
+        raise errors.Problem(404, "metrics_disabled", "Метрики отключены: задайте DD_METRICS_TOKEN.")
     if not hmac.compare_digest(request.headers.get("authorization", "").encode(), f"Bearer {token}".encode()):
-        raise HTTPException(401, "metrics token required")
+        raise errors.Problem(401, "metrics_token", "Нужен токен метрик в заголовке Authorization: Bearer.")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -909,7 +961,7 @@ WEB = Path(__file__).resolve().parent / "web"
 async def spa(path: str):
     """Built frontend; unknown paths fall back to index.html for client-side routing (never for ``/api/``)."""
     if path.startswith("api/"):
-        raise HTTPException(404, "not found")
+        raise errors.Problem(404, "not_found", "Такого адреса API нет.")
     target = (WEB / path).resolve()
     if path and target.is_relative_to(WEB) and target.is_file():
         headers = {"Cache-Control": "public, max-age=31536000, immutable"} if path.startswith("assets/") else {}

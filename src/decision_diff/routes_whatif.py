@@ -9,11 +9,11 @@ import asyncio
 import uuid
 
 import orjson
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
-from . import queue, whatif
+from . import errors, queue, whatif
 from .api import STATE, _interactive_slot, _own_run, _report, j, pool, session, user
 from .engine import procedures
 from .settings import settings
@@ -28,11 +28,12 @@ async def _procedure(c, s, pid):
         WHERE p.kind = 'whatif' AND (p.origin = 'file' OR p.owner_id = %s) AND (%s::uuid IS NULL OR p.id = %s)
         ORDER BY p.updated_at DESC LIMIT 1""", (s["user_id"], pid, pid))).fetchone()
     if not row:
-        raise HTTPException(404, "no whatif procedure")
+        raise errors.Problem(404, "whatif_missing", "Процедура «что если» не найдена: добавьте процедуру вида "
+                                                    "whatif в procedures/ или в рабочей области.")
     try:
         return row, whatif.declaration(row["code"], row["name"])
     except procedures.ProcedureError as e:
-        raise HTTPException(422, str(e)) from e
+        raise errors.Problem(422, "procedure_invalid", str(e)) from e
 
 
 @router.get("/api/runs/{run_id}/whatif")
@@ -80,12 +81,11 @@ async def get_whatif_result(exec_id: uuid.UUID, s=Depends(user)):
         row = await (await c.execute("SELECT * FROM whatif_runs WHERE id = %s AND user_id = %s",
                                      (exec_id, s["user_id"]))).fetchone()
     if not row:
-        raise HTTPException(404, "what-if evaluation not found")
+        raise errors.Problem(404, "whatif_not_found", "Расчет «что если» не найден.")
     out = {k: row[k] for k in ("id", "run_id", "state", "values", "scope", "created_at", "finished_at")}
     res = row["result"] or {}
     if row["state"] == "done":
         rep, _ = await _report(row["run_id"], s)
         out["result"] = {**await asyncio.to_thread(whatif.metrics, rep, res, row["scope"]),
                          "params": res["params"], "choices": res["choices"], "sandbox_ms": res["sandbox_ms"]}
-    out["error"] = res.get("error")
-    return j(out)
+    return j(errors.humanize({**out, "error": res.get("error")}))

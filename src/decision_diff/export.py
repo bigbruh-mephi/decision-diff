@@ -9,6 +9,8 @@ import urllib.parse
 
 import orjson
 
+from .errors import explain
+
 CSS = """
 :root{--bg:#fff;--fg:#14161a;--muted:#5d6470;--line:#e3e6ea;--fail:#b4232a;--fail-bg:#fdf0f0;--low:#8a6b6b;
 --low-bg:#faf6f6;--pass:#2f7a4f;--accent:#2a5bd7}
@@ -59,7 +61,7 @@ def render(rep, run, check_results, base):
              ("Сменилось решение", s["decision_changed"], _pct(s["decision_changed"], s["apps"])),
              ("Различия есть, решение то же", s["changed_same_decision"], _pct(s["changed_same_decision"], s["apps"]))]
     if s["approval_before"] is not None:
-        tiles.append(("Approval rate", f"{_pct(s['approval_before'], 1)} → {_pct(s['approval_after'], 1)}", ""))
+        tiles.append(("Доля одобрений (BEFORE → AFTER)", f"{_pct(s['approval_before'], 1)} → {_pct(s['approval_after'], 1)}", ""))
     fin = run.get("finished_at")
     fin = fin.strftime("%d.%m.%Y %H:%M %Z") if hasattr(fin, "strftime") else fin
     out = [(f"<!doctype html><html lang=ru><head><meta charset=utf-8><meta name=viewport "
@@ -97,7 +99,7 @@ def render(rep, run, check_results, base):
                    f"<td class=n>{apps}")
     for r in check_results:
         if r.get("error"):
-            out.append(f"<tr class=fail><td>{_e(r['label'])}<td colspan=6>ошибка: <code>{_e(r['error'])}</code>")
+            out.append(f"<tr class=fail><td>{_e(r['label'])}<td colspan=6>не выполнилась: {_e(explain(r['error']))}")
     out.append(f"</table></div><footer>decision-diff · прогон {_e(rid)} · файл автономный, ссылки открывают "
                f"{_e(base)}</footer></main></body></html>")
     return "".join(out)

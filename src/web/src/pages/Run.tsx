@@ -63,6 +63,7 @@ function ScopeBar({ runId, name, scope }: { runId: string; name: string; scope: 
   if (scope.cluster) chips.push({ label: `кластер №${scope.cluster}`, drop: () => go({ ...scope, cluster: undefined }) });
   if (scope.apps) chips.push({ label: plural(scope.apps.length, "выбранная заявка", "выбранные заявки", "выбранных заявок"), drop: () => go({ ...scope, apps: undefined }) });
   if (scope.check) chips.push({ label: `${plural(scope.check.cnt, "заявка", "заявки", "заявок")} строки проверки`, drop: () => go({ ...scope, check: undefined }) });
+  if (scope.cause) chips.push({ label: `причина смены решения: ${scope.cause.label}`, drop: () => go({ ...scope, cause: undefined }) });
   return (
     <nav aria-label="Текущий срез" className="flex flex-wrap items-center gap-1.5 text-xs">
       <button onClick={() => go({})} className="font-medium text-accent hover:underline">
@@ -87,6 +88,7 @@ function BatchControls({ run }: { run: Run }) {
   const [ds, setDs] = useState("");
   const add = useMutation({ mutationFn: () => api.post(`/api/runs/${run.id}/batches`, { dataset: ds || datasets.data?.[0]?.path }) });
   const seal = useMutation({ mutationFn: () => api.post(`/api/runs/${run.id}/seal`), onSuccess: () => qc.invalidateQueries({ queryKey: ["run", run.id] }) });
+  const err = add.error ?? seal.error ?? datasets.error;
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md border border-accent/40 bg-accent-bg px-3 py-2 text-xs">
       <span>Прогон открыт для догрузки порций.</span>
@@ -97,6 +99,8 @@ function BatchControls({ run }: { run: Run }) {
       </select>
       <Button size="sm" onClick={() => add.mutate()} disabled={add.isPending}>Догрузить порцию</Button>
       <Button size="sm" variant="primary" onClick={() => seal.mutate()} disabled={seal.isPending}>Завершить приём</Button>
+      {add.isSuccess && <span className="text-pass">Порция поставлена в очередь</span>}
+      {err && <div className="basis-full"><ErrorBox inline error={err} /></div>}
     </div>
   );
 }
@@ -167,7 +171,8 @@ export function RunPage() {
         </div>
       )}
       {r.state === "receiving" && !r.seal_requested && <BatchControls run={r} />}
-      {r.error && <ErrorBox error={r.error} />}
+      {(share.error || cancel.error) && <ErrorBox error={share.error ?? cancel.error} />}
+      {r.error && <ErrorBox title="Прогон завершился с ошибкой." error={r.error} debug={r.error_debug} />}
       <Tabs
         value={tab}
         onChange={setTab}

@@ -86,7 +86,7 @@ def test_xml_yaml_msgpack_depth_at_parser_limit_and_clear_error_beyond():
     assert len(out) == 1
     with pytest.raises(formats.FormatError, match="2048"):
         list(formats.parse("x.xml", xml(2049)))
-    with pytest.raises(formats.FormatError, match="YAML nesting"):
+    with pytest.raises(formats.FormatError, match="вложенность YAML"):
         list(formats.parse("x.yaml", b"[" * 5000 + b"]" * 5000))
     assert list(formats.parse("x.msgpack", b"\x81\xa1a" * 1024 + b"\x01"))
     with pytest.raises(formats.FormatError, match="1024"):
@@ -167,7 +167,7 @@ def test_manifest_cannot_point_outside_the_run_folder(tmp_path):
         run = tmp_path / "run"
         (run / "RESULTS" / "AFTER").mkdir(parents=True, exist_ok=True)
         (run / "manifest.json").write_text(json.dumps({"srez": {"BEFORE": {"dir": bad}, "AFTER": {"dir": "RESULTS/AFTER"}}}))
-        with pytest.raises(FileNotFoundError, match="inside the run folder"):
+        with pytest.raises(FileNotFoundError, match="внутри папки прогона"):
             ingest.slice_dirs(run)
 
 
