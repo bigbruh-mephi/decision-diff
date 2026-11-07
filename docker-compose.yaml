@@ -39,6 +39,62 @@ services:
       retries: 30
     deploy: {resources: {limits: {memory: 512m}}}
 
+  api:
+    build: .
+    image: decision-diff:latest
+    environment:
+      <<: *app-env
+      DD_ADMIN_LOGIN: ${DD_ADMIN_LOGIN:-admin}
+      DD_ADMIN_PASSWORD: ${DD_ADMIN_PASSWORD:?set DD_ADMIN_PASSWORD in .env}
+      DD_OPEN_REGISTRATION: ${DD_OPEN_REGISTRATION:-0}
+      TMPDIR: /data/tmp
+      DD_LLM_BASE_URL: ${DD_LLM_BASE_URL:-}
+      DD_LLM_API_KEY: ${DD_LLM_API_KEY:-}
+      DD_LLM_MODEL: ${DD_LLM_MODEL:-}
+    user: "10001"
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    volumes:
+      - runs:/data
+      - ${DD_DATASETS_PATH:-./datasets}:/datasets
+      - ./procedures:/procedures:ro
+    ports: ["${DD_HTTP_PORT:-8080}:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    deploy: {resources: {limits: {memory: 1g}}}
+
+  worker:
+    image: decision-diff:latest
+    command: ["dd-worker", "--procs", "${DD_WORKER_PROCS:-4}"]
+    environment:
+      <<: *app-env
+      DD_USER_WINDOW: ${DD_USER_WINDOW:-4}
+      DD_SANDBOX: ${DD_SANDBOX:-strict}
+      DD_LLM_BASE_URL: ${DD_LLM_BASE_URL:-}
+      DD_LLM_API_KEY: ${DD_LLM_API_KEY:-}
+      DD_LLM_MODEL: ${DD_LLM_MODEL:-}
+    read_only: true
+    tmpfs: ["/tmp:size=256m"]
+    volumes:
+      - runs:/data
+      - ${DD_DATASETS_PATH:-./datasets}:/datasets:ro
+      - ./procedures:/procedures:ro
+    depends_on:
+      api: {condition: service_healthy}
+    stop_grace_period: 30s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, KILL, CHOWN, DAC_OVERRIDE, FOWNER]
+    deploy: {resources: {limits: {memory: 4g, pids: 512}}}
+
 volumes:
   pg-data:
   rabbitmq-data:
+  runs:

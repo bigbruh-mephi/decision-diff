@@ -8,29 +8,32 @@ errors are rejected for broker-delayed retry and dead-lettered after the deliver
 import argparse
 import asyncio
 import logging
+import multiprocessing
 import os
 import signal
 import socket
+import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor
 
 import orjson
 from psycopg.types.json import Jsonb
 
-from . import db, pipeline, queue
+from . import ai, db, pipeline, queue, whatif
 from .engine.formats import FormatError
 from .engine.procedures import ProcedureError
+from .sandbox import SandboxError
 from .settings import settings
 
 log = logging.getLogger("dd.worker")
-DETERMINISTIC = (ProcedureError, FormatError, FileNotFoundError, ValueError)
+DETERMINISTIC = (ProcedureError, FormatError, FileNotFoundError, ValueError, SandboxError)
 
 
 class Worker:
     def __init__(self, pool, ch, procs):
         self.pool, self.ch = pool, ch
-        self.ex = ProcessPoolExecutor(procs)
-        self.trusted = ProcessPoolExecutor(2)
+        self.ex = ProcessPoolExecutor(procs, mp_context=multiprocessing.get_context("forkserver"))
+        self.trusted = ProcessPoolExecutor(2, mp_context=multiprocessing.get_context("forkserver"))
         self.name = f"{socket.gethostname()}:{os.getpid()}"
 
     async def cpu(self, fn, *args):
@@ -79,11 +82,12 @@ class Worker:
             async with self.pool.connection() as c:
                 await db.add_chunks(c, run_id, [(n, uri, apps)])
             await self.dispatch(t["user_id"])
+        requested = False
         async with self.pool.connection() as c:
             if not done:
-                await db.close_batch(c, run_id, t["source"], -(-len(items) // size))
+                requested = await db.close_batch(c, run_id, t["source"], -(-len(items) // size))
                 await db.event(c, run_id, "ingest.done", {"chunks": -(-len(items) // size), "apps": len(items)})
-        if t.get("seal"):
+        if t.get("seal") or requested:
             async with self.pool.connection() as c:
                 flip = await db.seal(c, run_id)
             if flip:
@@ -136,7 +140,12 @@ class Worker:
                     snaps = await self.snapshots(run["procedures"])
                     stats, stages = await self.cpu_trusted(pipeline.build_run, dirs, str(run_file),
                                                            run["report_params"] or {})
-                    checks = await self.cpu(pipeline.run_checks, str(run_file), snaps["checks"])
+                    t_checks = time.time()
+                    checks = [r for part in await asyncio.gather(*(
+                        self.cpu(pipeline.run_checks, str(run_file), [snap]) for snap in snaps["checks"])) for r in part]
+                    stages.append({"stage": "checks", "code_sha": None, "status": "done", "started_at": t_checks,
+                                   "duration_ms": (time.time() - t_checks) * 1000, "rows_in": len(snaps["checks"]),
+                                   "rows_out": sum(len(r["rows"]) for r in checks), "error": None})
                 except Exception as e:
                     await c.execute("UPDATE runs SET state = 'failed', error = %s, finished_at = now() WHERE id = %s",
                                     (f"finalize: {type(e).__name__}: {e}", run_id))
@@ -154,7 +163,12 @@ class Worker:
                 await c.execute("UPDATE runs SET state = 'done', stats = %s, finished_at = now() WHERE id = %s",
                                 (Jsonb(stats), run_id))
                 await db.event(c, run_id, "run.done", stats)
+                if settings.llm_enabled:
+                    await c.execute("""INSERT INTO ai_opinions (run_id, state, model) VALUES (%s, 'pending', %s)
+                                       ON CONFLICT (run_id) DO NOTHING""", (run_id, settings.llm_model))
                 await c.commit()
+                if settings.llm_enabled:
+                    await queue.publish(self.ch, queue.INTERACTIVE, {"kind": "ai", "run_id": run_id})
             finally:
                 await c.rollback()
                 await c.execute("SELECT pg_advisory_unlock(hashtextextended(%s::text, 9))", (run_id,))
@@ -205,12 +219,56 @@ class Worker:
             await c.execute("UPDATE cell_runs SET state = %s, result = %s, finished_at = now() WHERE id = %s",
                             (state, Jsonb(res), t["exec_id"]))
 
+    async def on_ai(self, t):
+        """AI second opinion of a finished run in the trusted pool (no user code); the result lands in ai_opinions."""
+        run_id = t["run_id"]
+        async with self.pool.connection() as c:
+            row = await (await c.execute("""SELECT r.report_params FROM ai_opinions a JOIN runs r ON r.id = a.run_id
+                                            WHERE a.run_id = %s AND a.state = 'pending' AND r.state = 'done'""",
+                                         (run_id,))).fetchone()
+            if not row:
+                return
+            checks = await (await c.execute("""SELECT DISTINCT ON (check_id) label, rows FROM check_results
+                                               WHERE run_id = %s ORDER BY check_id, created_at DESC""",
+                                            (run_id,))).fetchall()
+        try:
+            res = await self.cpu_trusted(ai.opinion, str(settings.run_dir(run_id) / "run.duckdb"),
+                                         row["report_params"] or {}, checks)
+        except Exception as e:
+            res = {"state": "failed", "model": settings.llm_model, "findings": [], "error": f"{type(e).__name__}: {e}"}
+        async with self.pool.connection() as c:
+            await c.execute("UPDATE ai_opinions SET state = %s, model = %s, result = %s, finished_at = now() "
+                            "WHERE run_id = %s", (res["state"], res["model"], Jsonb(res), run_id))
+            await db.event(c, run_id, "ai.done", {"state": res["state"], "findings": len(res["findings"])})
+
+    async def on_whatif(self, t):
+        """What-if on a finished run: arrays prepared once per procedure version (trusted pool), then the procedure
+        runs in the sandbox; the outcome codes land in ``whatif_runs`` for the API to poll and aggregate."""
+        async with self.pool.connection() as c:
+            got = await (await c.execute("UPDATE whatif_runs SET state = 'running' WHERE id = %s AND state = 'queued' "
+                                         "RETURNING run_id, code_sha, \"values\"", (t["exec_id"],))).fetchone()
+            row = got and await db.code(c, got["code_sha"])
+        if not got:
+            return
+        run_dir = settings.run_dir(got["run_id"])
+        try:
+            meta = await self.cpu_trusted(whatif.prepare, str(run_dir / "run.duckdb"), row["code"],
+                                          str(run_dir / "whatif" / got["code_sha"]), got["values"])
+            res = await self.cpu(whatif.evaluate, row["code"], row["name"], meta, got["values"])
+            state = "done"
+        except Exception as e:
+            res, state = {"error": f"{type(e).__name__}: {e}"}, "failed"
+        async with self.pool.connection() as c:
+            await c.execute("UPDATE whatif_runs SET state = %s, result = %s, finished_at = now() WHERE id = %s",
+                            (state, Jsonb(res), t["exec_id"]))
+
     async def on_dead(self, t):
         if t.get("kind") == "chunk":
             async with self.pool.connection() as c:
                 flip = await db.fail_chunk(c, t["run_id"], t["chunk_no"], "delivery limit exceeded")
             if flip:
                 await self.finalize_now(t["run_id"], t["user_id"])
+            await self.dispatch(t["user_id"])
 
     async def handle(self, message):
         async with message.process(requeue=True, ignore_processed=True):

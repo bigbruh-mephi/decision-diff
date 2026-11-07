@@ -26,7 +26,10 @@ def slice_dirs(run_dir):
     for side in ("BEFORE", "AFTER"):
         d = (srez.get(side) or {}).get("dir")
         if d:
-            found[side] = root / d
+            target = (root / d).resolve()
+            if not target.is_relative_to(root.resolve()) or not target.is_dir():
+                raise FileNotFoundError(f"{root}: manifest slice dir {d!r} must be a folder inside the run folder")
+            found[side] = target
         else:
             hits = sorted((root / "RESULTS").glob(f"{side}*")) or sorted(root.glob(f"{side}*"))
             if not hits:

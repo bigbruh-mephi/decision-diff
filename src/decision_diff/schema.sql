@@ -158,3 +158,32 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS report_params jsonb;
+
+CREATE TABLE IF NOT EXISTS ai_opinions (
+    run_id uuid PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    state text NOT NULL CHECK (state IN ('pending', 'done', 'failed')),
+    model text,
+    result jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz
+);
+
+ALTER TABLE procedures DROP CONSTRAINT IF EXISTS procedures_kind_check;
+ALTER TABLE procedures ADD CONSTRAINT procedures_kind_check
+    CHECK (kind IN ('normalize', 'compare', 'segments', 'facts', 'check', 'lineage', 'whatif'));
+
+CREATE TABLE IF NOT EXISTS whatif_runs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id uuid NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_sha text NOT NULL REFERENCES code_versions(sha),
+    "values" jsonb NOT NULL DEFAULT '{}',
+    scope jsonb NOT NULL DEFAULT '{}',
+    state text NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'running', 'done', 'failed')),
+    result jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS whatif_runs_last ON whatif_runs (run_id, user_id, created_at DESC);
+
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS seal_requested boolean NOT NULL DEFAULT false;

@@ -69,8 +69,11 @@ async def open_batch(c, run_id, source):
 
 
 async def close_batch(c, run_id, source, chunks):
+    """Mark a batch cut; returns True when a seal was requested meanwhile."""
     await c.execute("UPDATE batches SET chunks = %s, done = true WHERE run_id = %s AND source = %s",
                     (chunks, run_id, source))
+    row = await (await c.execute("SELECT seal_requested FROM runs WHERE id = %s", (run_id,))).fetchone()
+    return bool(row and row["seal_requested"])
 
 
 async def dispatch(c, owner_id, window):
@@ -103,7 +106,16 @@ async def flip_finalize(c, run_id):
 
 
 async def seal(c, run_id):
-    """Close a receiving run for new batches; returns True if finalize must be published now."""
+    """Close a receiving run for new batches; returns True if finalize must be published now.
+
+    While a batch is still being cut the request is only recorded (``seal_requested``); the last batch to finish
+    calls :func:`seal` again, so no batch is ever dropped by an early seal.
+    """
+    await c.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 5))", (run_id,))
+    busy = await (await c.execute("SELECT 1 FROM batches WHERE run_id = %s AND NOT done LIMIT 1", (run_id,))).fetchone()
+    if busy:
+        await c.execute("UPDATE runs SET seal_requested = true WHERE id = %s AND state = 'receiving'", (run_id,))
+        return False
     row = await (await c.execute("""
         UPDATE runs SET state = 'sealed', sealed_at = now(),
                total_chunks = (SELECT count(*) FROM chunks WHERE run_id = %(r)s)

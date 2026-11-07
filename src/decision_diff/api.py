@@ -9,6 +9,7 @@ import hashlib
 import os
 import shutil
 import time
+import urllib.parse
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ STATE = {}
 
 @asynccontextmanager
 async def lifespan(app):
+    Path(os.environ.get("TMPDIR", "/tmp")).mkdir(parents=True, exist_ok=True)
     pool = await db.pool(max_size=20)
     await db.migrate(pool)
     async with pool.connection() as c:
@@ -161,11 +163,19 @@ def _dataset_info(path):
             "after": sum(1 for _ in a.iterdir()), "excluded": man.get("technical_fields_always_differ", [])}
 
 
+def _visible(rel, s):
+    """Uploads are private to their owner; admin-placed datasets are shared."""
+    parts = Path(rel).parts
+    return not (parts and parts[0] == "uploads") or (len(parts) > 1 and parts[1] == str(s["user_id"]))
+
+
 @app.get("/api/datasets")
-async def datasets(_=Depends(user)):
+async def datasets(s=Depends(user)):
     root = settings.datasets_dir
     found = []
     for m in sorted(root.rglob("*")):
+        if not _visible(m.relative_to(root), s):
+            continue
         if m.is_dir() and ((m / "manifest.json").exists() or (m / "RESULTS").is_dir()):
             info = await asyncio.to_thread(_dataset_info, m)
             if info:
@@ -173,11 +183,11 @@ async def datasets(_=Depends(user)):
     return found
 
 
-def _resolve_dataset(rel):
-    """Dataset folder under the datasets root; ``..`` and absolute paths are rejected (admin symlinks allowed)."""
+def _resolve_dataset(rel, s):
+    """Dataset folder under the datasets root; ``..``, absolute paths and other users' uploads are rejected."""
     parts = Path(rel).parts
     p = settings.datasets_dir / rel
-    if not rel or Path(rel).is_absolute() or ".." in parts or not p.is_dir():
+    if not rel or Path(rel).is_absolute() or ".." in parts or not p.is_dir() or not _visible(rel, s):
         raise HTTPException(400, "unknown dataset")
     return p.absolute()
 
@@ -295,6 +305,7 @@ class Selection(BaseModel):
     normalize: uuid.UUID
     compare: uuid.UUID
     segments: uuid.UUID
+    lineage: uuid.UUID | None = None
     checks: list[uuid.UUID] = []
 
 
@@ -368,12 +379,13 @@ async def create_run(body: RunBody, s=Depends(user)):
             dataset = dataset or cfg["dataset"]
         if not sel or not dataset:
             raise HTTPException(422, "dataset and procedures (or a configuration) are required")
-        source = _resolve_dataset(dataset)
+        source = _resolve_dataset(dataset, s)
         try:
-            snap = await catalog.snapshot(c, sel.model_dump(mode="json"), params)
+            snap = await catalog.snapshot(c, sel.model_dump(mode="json"), params, s["user_id"])
         except procedures.ProcedureError as e:
             raise HTTPException(422, str(e)) from e
         run_id = await db.create_run(c, s["user_id"], body.name or Path(dataset).name, snap, params, body.config_id)
+        await db.open_batch(c, run_id, str(source))
         await c.execute("INSERT INTO audit (user_id, action, target) VALUES (%s, 'run.create', %s)",
                         (s["user_id"], str(run_id)))
     await queue.publish(STATE["ch"], queue.WORK, {"kind": "ingest", "run_id": str(run_id),
@@ -391,7 +403,9 @@ class BatchBody(BaseModel):
 async def add_batch(run_id: uuid.UUID, body: BatchBody, s=Depends(user)):
     """Add another batch of responses to an open run; processing starts immediately."""
     await _own_run(run_id, s, states=("receiving",))
-    source = _resolve_dataset(body.dataset)
+    source = _resolve_dataset(body.dataset, s)
+    async with pool().connection() as c:
+        await db.open_batch(c, run_id, str(source))
     await queue.publish(STATE["ch"], queue.WORK, {"kind": "ingest", "run_id": str(run_id),
                                                   "user_id": str(s["user_id"]), "source": str(source),
                                                   "seal": body.seal})
@@ -482,7 +496,11 @@ async def events(request: Request, run: list[uuid.UUID] | None = None, s=Depends
     if run:
         for r in run:
             await _own_run(r, s)
-    last = int(request.headers.get("last-event-id") or request.query_params.get("after") or 0)
+    raw = request.headers.get("last-event-id") or request.query_params.get("after") or "0"
+    last = int(raw) if raw.isdigit() else 0
+    if not run and not last:
+        async with pool().connection() as c:
+            last = (await (await c.execute("SELECT coalesce(max(id), 0) AS m FROM run_events")).fetchone())["m"]
 
     async def stream():
         nonlocal last
@@ -593,8 +611,8 @@ async def fields(run_id: uuid.UUID, request: Request, s=Depends(session)):
 
 
 class PivotBody(BaseModel):
-    rows: list[str] = []
-    cols: list[str] = []
+    rows: list[str] = Field(default=[], max_length=8)
+    cols: list[str] = Field(default=[], max_length=4)
     filters: dict[str, list[str]] = {}
     scope: dict = {}
 
@@ -677,6 +695,39 @@ async def run_check(run_id: uuid.UUID, body: CheckRunBody, s=Depends(user)):
     return {"queued": True, "sha": row["sha"]}
 
 
+@app.get("/api/runs/{run_id}/ai")
+async def ai_opinion(run_id: uuid.UUID, s=Depends(session)):
+    """AI second opinion: ``{state: disabled|pending|done|failed, model, findings, ...}``; 404 when never requested."""
+    await _own_run(run_id, s)
+    if not settings.llm_enabled:
+        return j({"state": "disabled"})
+    async with pool().connection() as c:
+        row = await (await c.execute("SELECT state, model, result FROM ai_opinions WHERE run_id = %s",
+                                     (run_id,))).fetchone()
+    if not row:
+        raise HTTPException(404, "no AI opinion for this run")
+    return j(row["result"] or {"state": row["state"], "model": row["model"]})
+
+
+@app.post("/api/runs/{run_id}/ai")
+async def rerun_ai(run_id: uuid.UUID, s=Depends(user)):
+    """Queue a fresh AI second opinion of a finished run."""
+    await _own_run(run_id, s, states=("done",))
+    if not settings.llm_enabled:
+        raise HTTPException(409, "LLM is not configured (DD_LLM_BASE_URL, DD_LLM_API_KEY, DD_LLM_MODEL)")
+    async with pool().connection() as c:
+        row = await (await c.execute("""
+            INSERT INTO ai_opinions (run_id, state, model) VALUES (%s, 'pending', %s)
+            ON CONFLICT (run_id) DO UPDATE SET state = 'pending', model = excluded.model, result = NULL,
+                created_at = now(), finished_at = NULL
+            WHERE ai_opinions.state <> 'pending' OR ai_opinions.created_at < now() - interval '15 minutes'
+            RETURNING run_id""",
+                                     (run_id, settings.llm_model))).fetchone()
+    if row:
+        await queue.publish(STATE["ch"], queue.INTERACTIVE, {"kind": "ai", "run_id": str(run_id)})
+    return {"queued": bool(row)}
+
+
 class CellRun(BaseModel):
     code: str = Field(max_length=512_000)
     run_id: uuid.UUID | None = None
@@ -742,7 +793,8 @@ async def export_html(run_id: uuid.UUID, request: Request, s=Depends(session)):
                                          WHERE run_id = %s ORDER BY check_id, created_at DESC""", (run_id,))).fetchall()
     base = str(request.base_url).rstrip("/")
     html = await asyncio.to_thread(export.render, rep, row, rows, base)
-    return HTMLResponse(html, headers={"Content-Disposition": f'attachment; filename="report-{row["name"]}.html"',
+    fname = urllib.parse.quote(f"report-{row['name']}.html")
+    return HTMLResponse(html, headers={"Content-Disposition": f"attachment; filename=\"report.html\"; filename*=UTF-8''{fname}",
                                        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
                                                                   "img-src data:"})
 
@@ -759,12 +811,18 @@ async def healthz():
     return {"ok": True}
 
 
+from .routes_whatif import router as whatif_router
+
+app.include_router(whatif_router)
+
 WEB = Path(__file__).resolve().parent / "web"
 
 
 @app.get("/{path:path}", include_in_schema=False)
 async def spa(path: str):
-    """Built frontend; unknown paths fall back to index.html for client-side routing."""
+    """Built frontend; unknown paths fall back to index.html for client-side routing (never for ``/api/``)."""
+    if path.startswith("api/"):
+        raise HTTPException(404, "not found")
     target = (WEB / path).resolve()
     if path and target.is_relative_to(WEB) and target.is_file():
         headers = {"Cache-Control": "public, max-age=31536000, immutable"} if path.startswith("assets/") else {}

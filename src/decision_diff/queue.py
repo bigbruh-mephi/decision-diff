@@ -6,7 +6,7 @@ import orjson
 from .settings import settings
 
 WORK, FINALIZE, INTERACTIVE, DLX, DEAD = "dd.work", "dd.finalize", "dd.interactive", "dd.dlx", "dd.dead"
-PRIORITY = {"ingest": 2, "chunk": 2, "finalize": 6, "cell": 6, "check": 6}
+PRIORITY = {"ingest": 2, "chunk": 2, "finalize": 6, "cell": 6, "check": 6, "whatif": 6, "ai": 2}
 
 
 def _queue_args(limit):

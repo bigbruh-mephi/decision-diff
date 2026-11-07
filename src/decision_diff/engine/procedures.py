@@ -9,14 +9,20 @@ Kinds and entrypoints:
 - ``segments``: ``entrypoint(before_doc, after_doc, params) -> dict`` (one row of the segments layer per app);
   ``params["multi_valued"]`` maps a field to its separator for report filters.
 - ``facts``: ``entrypoint(mart, params) -> list[dict]`` extra report facts.
-- ``check``: the given check contract, ``entrypoint(mart, params) -> list[dict]`` result rows.
+- ``check``: the given check contract, ``entrypoint(mart, params) -> list[dict]`` result rows. A param whose value
+  is ``"@lineage"`` receives the run's lineage param of the same name.
+- ``lineage``: params only, ``{"stages": [{"name", "role", "paths"}], "decision_path"}``; ordered stages, first
+  matching glob wins; roles ``input | reference | logic | outcome``.
+- ``whatif``: ``entrypoint(data, params) -> array[n_apps]`` of outcome indices over arrays the app prepares from the
+  declared ``unit_depth``, ``inputs`` and ``outcome``; ``params`` declares the user controls (see ``whatif.py``).
 """
 
+import contextlib
 import hashlib
 import types
 from pathlib import Path
 
-KINDS = ("normalize", "compare", "segments", "facts", "check")
+KINDS = ("normalize", "compare", "segments", "facts", "check", "lineage", "whatif")
 CHECK_FIELDS = ("LABEL", "SOURCE", "ARGUMENT", "CNT", "TOTAL", "METRIC", "APP_IDS", "RESULT", "CONFIDENCE")
 
 
@@ -43,7 +49,7 @@ def load(code, name="<workspace>", kind=None):
     missing = [k for k in ("id", "label") if not spec.get(k)]
     if missing:
         raise ProcedureError(f"{name}: missing {missing}")
-    if spec["kind"] in ("segments", "facts", "check") and not callable(spec.get("entrypoint")):
+    if spec["kind"] in ("segments", "facts", "check", "whatif") and not callable(spec.get("entrypoint")):
         raise ProcedureError(f"{name}: {spec['kind']} procedure needs a callable entrypoint")
     spec.setdefault("params", {})
     spec["code"], spec["sha"] = code, hashlib.sha256(code.encode()).hexdigest()[:16]
@@ -75,11 +81,12 @@ def validate_check_rows(check_id, rows):
     return out
 
 
-def inspect_source(code, name="<workspace>"):
-    """Contract metadata from source WITHOUT executing it (for the API and file discovery).
+def declaration(code, name="<workspace>"):
+    """Literal entries of the ``PROCEDURE`` (or ``CHECK``) dict assignment, read WITHOUT executing the code.
 
-    Reads the literal ``id``/``label``/``kind`` of the ``PROCEDURE`` or ``CHECK`` assignment; raises
-    :class:`ProcedureError` on syntax errors or a missing contract. Execution happens only in the sandbox.
+    Returns ``(variable name, {key: literal})``; non-literal entries (``entrypoint``) are left out. A what-if
+    declaration (``unit_depth``, ``inputs``, ``outcome``, ``params``) is read this way by trusted code.
+    Raises :class:`ProcedureError` on syntax errors or a missing contract.
     """
     import ast
 
@@ -93,16 +100,28 @@ def inspect_source(code, name="<workspace>"):
                 and node.targets[0].id in ("PROCEDURE", "CHECK") and isinstance(node.value, ast.Dict):
             meta = {}
             for k, v in zip(node.value.keys, node.value.values):
-                if isinstance(k, ast.Constant) and k.value in ("id", "label", "kind") and isinstance(v, ast.Constant):
-                    meta[k.value] = v.value
+                if isinstance(k, ast.Constant):
+                    with contextlib.suppress(ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                        meta[k.value] = ast.literal_eval(v)
             found[node.targets[0].id] = meta
-    meta = found.get("PROCEDURE") or found.get("CHECK")
-    if meta is None:
+    var = "PROCEDURE" if "PROCEDURE" in found else "CHECK" if "CHECK" in found else None
+    if var is None:
         raise ProcedureError(f"{name}: module must assign a literal PROCEDURE or CHECK dict")
-    kind = meta.get("kind") or ("check" if "CHECK" in found else None)
+    return var, found[var]
+
+
+def inspect_source(code, name="<workspace>"):
+    """Contract metadata from source WITHOUT executing it (for the API and file discovery).
+
+    Reads the literal ``id``/``label``/``kind`` of the ``PROCEDURE`` or ``CHECK`` assignment; raises
+    :class:`ProcedureError` on syntax errors or a missing contract. Execution happens only in the sandbox.
+    """
+    var, meta = declaration(code, name)
+    kind = meta.get("kind") or ("check" if var == "CHECK" else None)
     if kind not in KINDS:
         raise ProcedureError(f"{name}: kind must be one of {KINDS}")
-    if not meta.get("id") or not meta.get("label"):
+    if not isinstance(meta.get("id"), str) or not isinstance(meta.get("label"), str) or not meta["id"] \
+            or not meta["label"]:
         raise ProcedureError(f"{name}: id and label must be string literals")
     return {"kind": kind, "id": meta["id"], "label": meta["label"],
             "sha": hashlib.sha256(code.encode()).hexdigest()[:16]}

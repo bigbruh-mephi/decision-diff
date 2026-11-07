@@ -18,3 +18,8 @@ artefacts/
 # Frontend
 src/web/node_modules/
 src/decision_diff/web/
+
+# Local datasets (mounted into containers)
+datasets/*
+!datasets/.gitkeep
+src/web/tsconfig.tsbuildinfo

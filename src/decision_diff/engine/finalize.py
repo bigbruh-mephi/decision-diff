@@ -6,26 +6,48 @@ Reads exactly the listed chunk directories (never a glob: orphan attempts may ex
 roaring bitmaps of app ordinals (exact distinct-app counts; CNT is never summed across facts).
 """
 
+import fnmatch
+import hashlib
 import os
+import re
 from pathlib import Path
 
 import duckdb
+import orjson
 import pyarrow as pa
 from pyroaring import BitMap
 
 FACT_DIMS = ("path_id", "ARRAY_KEY", "ADJUSTED_VALUE", "DIFF_FLAG", "CHANGE_TYPE", "SOURCE")
+MERGE_JACCARD = 0.6
+
+
+def glob_re(patterns):
+    """One regex for dotted-path globs: ``*`` matches one segment, ``**`` any number of segments."""
+    return re.compile("|".join(fnmatch.translate(p.replace("**", "\0").replace("*", "[!.]*").replace("\0", "*"))
+                               for p in patterns) or "(?!)")
+
+
+def stage_roles(paths, stages):
+    """``{key: role}`` of the first lineage stage whose globs match each path of ``{key: PATH}`` (else ``other``)."""
+    rx = [(s["role"], glob_re(s["paths"])) for s in stages]
+    return {k: next((r for r, g in rx if g.match(p)), "other") for k, p in paths.items()}
 
 
 def _list(dirs, name):
     return "[" + ",".join("'" + str(Path(d) / f"{name}.parquet").replace("'", "''") + "'" for d in dirs) + "]"
 
 
-def build(chunk_dirs, out_path, segments_params=None, facts_max_values=200, threads=4, memory_limit="2GB"):
-    """Build ``out_path`` (written to ``.tmp`` then renamed atomically). Returns run statistics."""
+def build(chunk_dirs, out_path, report_params=None, facts_max_values=200, threads=4, memory_limit="2GB"):
+    """Build ``out_path`` (written to ``.tmp`` then renamed atomically). Returns run statistics.
+
+    ``report_params`` are the segments procedure params plus the run's ``lineage`` params (when declared); they are
+    stored in ``run_meta`` so checks can resolve ``"@lineage"`` params from the run itself.
+    """
     out = Path(out_path)
     tmp = out.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
-    multi = (segments_params or {}).get("multi_valued", {})
+    report_params = report_params or {}
+    multi = report_params.get("multi_valued", {})
     con = duckdb.connect(str(tmp), config={"threads": threads, "memory_limit": memory_limit})
     try:
         m, p, s, i = (_list(chunk_dirs, n) for n in ("mart", "paths", "segments", "issues"))
@@ -53,15 +75,15 @@ def build(chunk_dirs, out_path, segments_params=None, facts_max_values=200, thre
         _facts(con, facts_max_values)
         _segment_bitmaps(con, multi)
         _structure(con)
-        _clusters(con)
+        _clusters(con, (report_params.get("lineage") or {}).get("stages") or [])
         _transitions(con)
         stats = dict(zip(("apps", "mart_rows", "comparison_rows", "changed_apps"), con.execute("""
             SELECT (SELECT count(*) FROM apps), (SELECT count(*) FROM mart),
                    (SELECT count(*) FROM (SELECT DISTINCT app_ord, path_id, ARRAY_KEY FROM mart)),
                    (SELECT count(DISTINCT app_ord) FROM mart WHERE DIFF_FLAG = 1)""").fetchone()))
         stats["facts"] = con.execute("SELECT count(*) FROM facts").fetchone()[0]
-        con.execute("CREATE TABLE run_meta AS SELECT * FROM (VALUES ('duckdb_version', ?)) t(key, value)",
-                    [duckdb.__version__])
+        con.execute("CREATE TABLE run_meta AS SELECT * FROM (VALUES ('duckdb_version', ?), ('report_params', ?)) "
+                    "t(key, value)", [duckdb.__version__, orjson.dumps(report_params).decode()])
         con.execute("CHECKPOINT")
     finally:
         con.close()
@@ -130,16 +152,42 @@ def _structure(con):
         HAVING apps_new + apps_lost + apps_type_changed > 0""")
 
 
-def _clusters(con):
-    """Change clusters: applications sharing the same set of changed paths (generic, no domain knowledge)."""
+def _clusters(con, stages):
+    """Change clusters by cause fingerprint: the set of changed (PATH, CHANGE_TYPE) outside outcome-role stages.
+
+    Outcomes are consequences and would split one cause by its effect, so the lineage's outcome stages are left out
+    of the fingerprint (no lineage: every path counts). Distinct fingerprints are merged greedily, largest first, into
+    the first leader with Jaccard similarity >= ``MERGE_JACCARD``; apps whose changes are all outcomes form their own
+    cluster. ``paths`` is the union of the members' changed paths; ``signature`` hashes PATH strings of the leader
+    fingerprint, so the same cause has the same signature in every run (``path_id`` is per run).
+    """
+    paths = dict(con.execute("SELECT path_id, PATH FROM attrs").fetchall())
+    outcome = sorted(k for k, r in stage_roles(paths, stages).items() if r == "outcome")
     rows = con.execute("""
-        WITH sig AS (SELECT app_ord, list(DISTINCT path_id ORDER BY path_id) AS paths
-                     FROM mart WHERE DIFF_FLAG = 1 GROUP BY app_ord)
-        SELECT paths, list(app_ord ORDER BY app_ord) FROM sig GROUP BY paths
-        ORDER BY count(*) DESC, paths""").fetchall()
-    con.execute("CREATE TABLE clusters (cid UINTEGER, paths UINTEGER[], CNT UINTEGER, APPS BLOB)")
-    if rows:
-        _insert(con, "clusters", ("cid", "paths", "CNT", "APPS"), [(i + 1, r[0], r[1]) for i, r in enumerate(rows)])
+        WITH ch AS (SELECT DISTINCT app_ord, path_id, CHANGE_TYPE FROM mart WHERE DIFF_FLAG = 1),
+        a AS (SELECT app_ord, list(path_id) AS pids,
+                     list_sort(coalesce(list(path_id || ':' || CHANGE_TYPE)
+                                        FILTER (WHERE NOT list_contains(?::UINTEGER[], path_id)), [])) AS sig
+              FROM ch GROUP BY app_ord)
+        SELECT sig, list(app_ord ORDER BY app_ord), list_sort(list_distinct(flatten(list(pids)))) FROM a
+        GROUP BY sig ORDER BY count(*) DESC, sig""", [outcome]).fetchall()
+    leaders = []
+    for sig, apps, pids in rows:
+        s = frozenset(sig)
+        hit = next((c for c in leaders if s and c[0] and len(s & c[0]) / len(s | c[0]) >= MERGE_JACCARD), None)
+        if hit:
+            hit[1].extend(apps)
+            hit[2].update(pids)
+        else:
+            leaders.append((s, list(apps), set(pids)))
+    out = []
+    for s, apps, pids in leaders:
+        items = sorted(f"{paths[int(i)]}:{t}" for i, t in (x.split(":", 1) for x in s))
+        out.append((sorted(pids), hashlib.sha256("\n".join(items).encode()).hexdigest()[:16], sorted(apps)))
+    out.sort(key=lambda r: (-len(r[2]), r[1]))
+    con.execute("CREATE TABLE clusters (cid UINTEGER, paths UINTEGER[], signature VARCHAR, CNT UINTEGER, APPS BLOB)")
+    if out:
+        _insert(con, "clusters", ("cid", "paths", "signature", "CNT", "APPS"), [(i + 1, *r) for i, r in enumerate(out)])
 
 
 def _transitions(con, top=20):

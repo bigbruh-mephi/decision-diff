@@ -13,7 +13,7 @@ from collections import OrderedDict
 
 from pyroaring import BitMap
 
-from .engine import mart
+from .engine import finalize, mart
 
 FACT_DIMS = ("PREFIX", "CLASS", "SUFFIX", "ARRAY_KEY", "KEY", "PATH", "ADJUSTED_VALUE", "DIFF_FLAG", "CHANGE_TYPE",
              "SOURCE")
@@ -42,8 +42,10 @@ class RunReport:
         self.seg = {}
         for field, value, apps in q.execute("SELECT FIELD, VALUE, APPS FROM seg_bitmaps").fetchall():
             self.seg.setdefault(field, {})[value] = BitMap.deserialize(apps)
-        self.clusters = [{"cid": cid, "paths": list(paths), "apps": BitMap.deserialize(apps)} for cid, paths, apps in
-                         q.execute("SELECT cid, paths, APPS FROM clusters ORDER BY cid").fetchall()]
+        cur = q.execute("SELECT * FROM clusters ORDER BY cid")
+        self.clusters = [{"cid": r["cid"], "paths": list(r["paths"]), "signature": r.get("signature"),
+                          "apps": BitMap.deserialize(r["APPS"])}
+                         for r in (dict(zip([d[0] for d in cur.description], t)) for t in cur.fetchall())]
         self.transitions = {}
         for pid, vb, va, apps in q.execute("SELECT path_id, VALUE_BEFORE, VALUE_AFTER, APPS FROM transitions").fetchall():
             self.transitions.setdefault(pid, []).append((vb, va, BitMap.deserialize(apps)))
@@ -54,9 +56,14 @@ class RunReport:
         dec = self.params.get("decision_field", "DECISION")
         self.dec_before, self.dec_after = self.seg.get(f"{dec}_BEFORE", {}), self.seg.get(f"{dec}_AFTER", {})
         self.flipped = self.seg.get(f"{dec}_CHANGED", {}).get("1", BitMap())
-        inputs = [_glob(p) for p in self.params.get("input_paths", [])]
-        self.input_paths = {pid for pid, a in self.attrs.items() if any(fnmatch.fnmatchcase(a["PATH"], g)
-                                                                        for g in inputs)}
+        stages = (self.params.get("lineage") or {}).get("stages")
+        if stages:
+            roles = finalize.stage_roles({pid: a["PATH"] for pid, a in self.attrs.items()}, stages)
+            self.input_paths = {pid for pid, r in roles.items() if r == "input"}
+        else:
+            inputs = [_glob(p) for p in self.params.get("input_paths", [])]
+            self.input_paths = {pid for pid, a in self.attrs.items() if any(fnmatch.fnmatchcase(a["PATH"], g)
+                                                                            for g in inputs)}
         self.lock = threading.Lock()
 
     def scope(self, spec):
@@ -83,7 +90,8 @@ class RunReport:
 
         swap = [{"before": vb, "after": va, "apps": n} for vb, b in sorted(self.dec_before.items())
                 for va, a in sorted(self.dec_after.items()) if (n := len(b & a & s))]
-        return {"apps": len(s), "changed": len(changed), "decision_changed": len(flipped),
+        return {"decision_field": self.params.get("decision_field", "DECISION"),
+                "apps": len(s), "changed": len(changed), "decision_changed": len(flipped),
                 "changed_same_decision": len(changed - flipped), "unchanged": len(s - changed),
                 "approval_before": rate(self.dec_before), "approval_after": rate(self.dec_after),
                 "input_driven": len(BitMap.union(BitMap(), *(c["apps"] for c in self.clusters
@@ -91,8 +99,9 @@ class RunReport:
                 "swap": swap}
 
     def _origin(self, c):
-        """``input`` when the cluster's changes include declared input-data paths: the decision may follow the data,
-        not the strategy (a false alarm for the analyst); ``logic`` otherwise."""
+        """``input`` when the cluster's changes include input-data paths (the lineage's input stages, else the
+        segments' ``input_paths``): the decision may follow the data, not the strategy (a false alarm for the
+        analyst); ``logic`` otherwise."""
         return "input" if any(p in self.input_paths for p in c["paths"]) else "logic"
 
     def cluster_rows(self, spec, top=20):
@@ -104,7 +113,8 @@ class RunReport:
                 continue
             trans = sorted(((len(bm & apps), pid, vb, va) for pid in c["paths"]
                             for vb, va, bm in self.transitions.get(pid, []) if vb != "(other)"), reverse=True)[:3]
-            out.append({"cid": c["cid"], "apps": len(apps), "decision_changed": len(apps & self.flipped),
+            out.append({"cid": c["cid"], "signature": c["signature"], "apps": len(apps),
+                        "decision_changed": len(apps & self.flipped),
                         "origin": self._origin(c), "paths": [self.attrs[p]["PATH"] for p in c["paths"]],
                         "input_paths": [self.attrs[p]["PATH"] for p in c["paths"] if p in self.input_paths],
                         "transitions": [{"path": self.attrs[p]["PATH"], "before": vb, "after": va, "apps": n}
@@ -234,12 +244,14 @@ class RunReport:
 
     def app_list(self, bm, offset=0, limit=100):
         ids = list(bm)[offset:offset + limit]
-        seg_fields = [f"{self.params.get('decision_field', 'DECISION')}_{x}" for x in ("BEFORE", "AFTER")]
+        def decision(side, i):
+            return next((v for v, b in side.items() if i in b), None)
+
         return {"total": len(bm), "apps": [{"app_id": self.app_id[i], "changed": i in self.changed,
                                             "decision_changed": i in self.flipped,
                                             "cluster": next((c["cid"] for c in self.clusters if i in c["apps"]), None),
-                                            **{f: next((v for v, b in self.seg.get(f, {}).items() if i in b), None)
-                                               for f in seg_fields}} for i in ids]}
+                                            "decision_before": decision(self.dec_before, i),
+                                            "decision_after": decision(self.dec_after, i)} for i in ids]}
 
     def app(self, app_id):
         """Horizontal BEFORE/AFTER view of one application (presentation only; storage stays vertical)."""

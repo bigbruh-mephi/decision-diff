@@ -65,3 +65,28 @@ def test_timeout_and_memory_limits():
         run(_spin, wall_s=1)
     with pytest.raises(sandbox.SandboxError, match="MemoryError"):
         run(_alloc, mem_mb=512)
+
+
+def _is_open(fd):
+    try:
+        os.fstat(fd)
+        return True
+    except OSError:
+        return False
+
+
+def _environ_block():
+    return open("/proc/self/environ", "rb").read()[:20].decode(errors="replace")
+
+
+def _launcher_probe(path):
+    with open(path, "w") as f:
+        return sandbox.run(_is_open, (f.fileno(),)), _is_open(f.fileno())
+
+
+def test_inherited_descriptors_and_environ_block_are_unreachable(tmp_path):
+    with ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn")) as ex:
+        in_child, in_launcher = ex.submit(_launcher_probe, str(tmp_path / "handle")).result()
+    assert in_launcher and not in_child
+    with pytest.raises(sandbox.SandboxError):
+        run(_environ_block)

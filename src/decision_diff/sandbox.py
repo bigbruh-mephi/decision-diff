@@ -1,9 +1,10 @@
 """Per-execution sandbox for user procedures (x86_64 Linux).
 
-A worker pool process (modules already imported) forks one child per execution. The child irreversibly confines
-itself — new session, optional uid drop (when the worker runs as root in its hardened container), rlimits,
+A worker pool process (modules already imported) forks one child per execution. The child first closes every
+inherited file descriptor except its result pipe (no database, broker or IPC handles reach user code), then
+irreversibly confines itself — new session, optional uid drop (when the worker runs as root in its hardened container), rlimits,
 no_new_privs, Landlock (read-only paths, one writable directory, no TCP, scoped signals/abstract sockets) and a
-seccomp denylist — clears the environment (secrets live only in the parent), runs the target and returns its result
+seccomp denylist — clears the environment (``/proc/self`` is not readable, so the initial environment block is unreachable too), runs the target and returns its result
 as JSON through a pipe. The parent never unpickles anything from the child, enforces a wall-clock deadline and a
 result size cap, and kills the whole process group on timeout.
 """
@@ -130,11 +131,11 @@ def confine(read, write, uid=None, mem_mb=2048, cpu_s=300, nofile=128, nproc=64,
 def _python_paths():
     paths = {sys.prefix, sys.base_prefix, sys.exec_prefix, os.path.dirname(os.__file__)}
     paths |= {p for p in sys.path if p and os.path.isdir(p)}
-    return sorted(paths) + ["/proc/self", "/sys/devices/system/cpu", "/sys/fs/cgroup", "/etc/localtime", "/usr/share/zoneinfo",
+    return sorted(paths) + ["/proc/self/cgroup", "/sys/devices/system/cpu", "/sys/fs/cgroup", "/etc/localtime", "/usr/share/zoneinfo",
                             "/dev/null", "/dev/urandom"]
 
 
-def run(target, args=(), read=(), write=(), wall_s=300, mem_mb=2048, result_mb=64, uid=None, require=True):
+def run(target, args=(), read=(), write=(), wall_s=300, mem_mb=4096, result_mb=64, uid=None, require=True):
     """Run ``target(*args)`` in a confined child and return its JSON-decoded result.
 
     ``read``/``write`` are the only paths the child may read / read and write (plus the Python installation).
@@ -144,12 +145,16 @@ def run(target, args=(), read=(), write=(), wall_s=300, mem_mb=2048, result_mb=6
         raise SandboxError("Landlock or libseccomp is not available; refusing to run user code")
     if threads() > 1:
         raise SandboxError("sandbox launcher process is multi-threaded; fork could deadlock the child")
+    if uid is not None and os.getuid() == 0:
+        for p in write:
+            os.chown(p, uid, uid)
     r, w = os.pipe()
     pid = os.fork()
     if pid == 0:
-        os.close(r)
         code = 0
         try:
+            os.closerange(3, w)
+            os.closerange(w + 1, resource.getrlimit(resource.RLIMIT_NOFILE)[0])
             confine(_python_paths() + list(read), list(write), uid=uid, mem_mb=mem_mb, cpu_s=wall_s + 5)
             os.environ.clear()
             payload = {"ok": True, "result": target(*args)}

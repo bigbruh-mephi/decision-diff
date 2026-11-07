@@ -19,6 +19,7 @@ async def submit(source, name, owner, wait):
             kind = (await (await c.execute("SELECT kind FROM procedures WHERE id = %s", (pid,))).fetchone())["kind"]
             kinds.setdefault(kind, []).append(pid)
         sel = {k: kinds[k][0] for k in ("normalize", "compare", "segments")}
+        sel["lineage"] = kinds.get("lineage", [None])[0]
         sel["checks"] = kinds.get("check", [])
         run_id = await db.create_run(c, user, name, await catalog.snapshot(c, sel))
     conn, ch = await queue.connect()

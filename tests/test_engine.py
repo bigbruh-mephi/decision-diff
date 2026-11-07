@@ -143,3 +143,13 @@ def test_reference_numbers(run_dir, reference, tmp_path):
     for f in sorted((TASK / "checks").glob("check_*.py")):
         chk = procedures.load_file(f, "check")
         assert procedures.validate_check_rows(chk["id"], chk["entrypoint"](M, chk["params"]))
+
+
+def test_manifest_cannot_point_outside_the_run_folder(tmp_path):
+    for bad in ("/etc", "../outside"):
+        (tmp_path / "outside").mkdir(exist_ok=True)
+        run = tmp_path / "run"
+        (run / "RESULTS" / "AFTER").mkdir(parents=True, exist_ok=True)
+        (run / "manifest.json").write_text(json.dumps({"srez": {"BEFORE": {"dir": bad}, "AFTER": {"dir": "RESULTS/AFTER"}}}))
+        with pytest.raises(FileNotFoundError, match="inside the run folder"):
+            ingest.slice_dirs(run)

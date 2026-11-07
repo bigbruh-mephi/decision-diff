@@ -7,6 +7,8 @@ version recorded when it started; loaded modules are cached per process by sha.
 import time
 from pathlib import Path
 
+import orjson
+
 from . import sandbox
 from .engine import chunk, finalize, ingest, mart, procedures
 from .settings import settings
@@ -71,7 +73,8 @@ def _chunk_body(input_uri, out_dir, snaps):
               _stage("compare", c["sha"], a, b, m.num_rows, m.num_rows),
               _stage("segments", s["sha"], b, b + t["segments"], len(apps), sg.num_rows),
               _stage("write", None, t2, t3, rows_out=m.num_rows)]
-    return {**stats, "report_params": s["params"]}, stages
+    report = {**s["params"], "lineage": _proc(snaps["lineage"])["params"]} if snaps.get("lineage") else s["params"]
+    return {**stats, "report_params": report}, stages
 
 
 def build_run(chunk_dirs, run_file, report_params):
@@ -101,10 +104,22 @@ def _check_body(run_file, snap):
     chk = _proc({**snap, "kind": "check"})
     con = mart.open_run(run_file, threads=1)
     try:
-        rows = chk["entrypoint"](mart.Mart(con), chk["params"])
+        rows = chk["entrypoint"](mart.Mart(con), _with_lineage(con, chk["params"]))
         return chk["id"], chk["label"], rows
     finally:
         con.close()
+
+
+def _with_lineage(con, params):
+    """Replace ``"@lineage"`` param values with the run's lineage param of the same name (stored at finalize)."""
+    if "@lineage" not in params.values():
+        return params
+    row = con.execute("SELECT value FROM run_meta WHERE key = 'report_params'").fetchone()
+    lineage = orjson.loads(row[0]).get("lineage") if row else None
+    missing = [k for k, v in params.items() if v == "@lineage" and k not in (lineage or {})]
+    if missing:
+        raise procedures.ProcedureError(f"check needs the run's lineage procedure for params {missing}")
+    return {k: lineage[k] if v == "@lineage" else v for k, v in params.items()}
 
 
 def run_cell(code, run_file):
@@ -133,7 +148,7 @@ def _cell_body(code, run_file):
                 res["value"] = _preview(eval(compile(ast.Expression(last.value), "cell", "eval"), env))
             chk = env.get("CHECK")
             if isinstance(chk, dict) and callable(chk.get("entrypoint")) and "mart" in env:
-                rows = chk["entrypoint"](env["mart"], chk.get("params", {}))
+                rows = chk["entrypoint"](env["mart"], _with_lineage(con, chk.get("params", {})))
                 res["check"] = {"id": chk.get("id"), "label": chk.get("label"),
                                 "rows": procedures.validate_check_rows(chk.get("id", "cell"), rows)}
     except Exception as e:

@@ -44,16 +44,23 @@ async def save_workspace(c, owner_id, code, proc_id=None):
     return row and row["id"]
 
 
-async def snapshot(c, selection, params=None):
-    """Freeze ``{"normalize": id, "compare": id, "segments": id, "checks": [ids]}`` into code shas for a run."""
+async def snapshot(c, selection, params=None, owner_id=None):
+    """Freeze ``{"normalize": id, "compare": id, "segments": id, "checks": [ids]}`` into code shas for a run.
+
+    Only placed files and the owner's own workspace procedures can be selected.
+    """
     params = params or {}
 
     async def one(pid, kind):
-        row = await (await c.execute("SELECT sha, kind FROM procedures WHERE id = %s", (pid,))).fetchone()
+        row = await (await c.execute("""SELECT sha, kind FROM procedures WHERE id = %s
+                                        AND (origin = 'file' OR owner_id = %s OR %s::uuid IS NULL)""",
+                                     (pid, owner_id, owner_id))).fetchone()
         if row is None or row["kind"] != kind:
             raise procedures.ProcedureError(f"procedure {pid} is not a {kind} procedure")
         return {"sha": row["sha"], "params": params.get(str(pid), {})}
 
     snap = {k: await one(selection[k], k) for k in ("normalize", "compare", "segments")}
+    if selection.get("lineage"):
+        snap["lineage"] = await one(selection["lineage"], "lineage")
     snap["checks"] = [await one(pid, "check") for pid in selection.get("checks", [])]
     return snap
