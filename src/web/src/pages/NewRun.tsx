@@ -54,6 +54,7 @@ export function NewRunPage() {
         normalize: byKind.normalize?.[0]?.id ?? "",
         compare: byKind.compare?.[0]?.id ?? "",
         segments: byKind.segments?.[0]?.id ?? "",
+        lineage: byKind.lineage?.[0]?.id ?? null,
         checks: (byKind.check ?? []).map((p) => p.id),
       });
   }, [procs.data, byKind, sel]);
@@ -156,6 +157,11 @@ export function NewRunPage() {
                 <ProcSelect items={byKind[st.kind] ?? []} value={sel[st.kind]} onChange={(v) => setSel({ ...sel, [st.kind]: v })} />
               </Field>
             ))}
+            {(byKind.lineage ?? []).length > 0 && (
+              <Field label="Цепочка этапов (lineage)" hint="Вход → признаки → скоры → порог → правила → решение: для атрибуции «логика или входные данные»">
+                <ProcSelect items={byKind.lineage ?? []} value={sel.lineage ?? ""} onChange={(v) => setSel({ ...sel, lineage: v })} />
+              </Field>
+            )}
           </div>
         </Card>
       )}

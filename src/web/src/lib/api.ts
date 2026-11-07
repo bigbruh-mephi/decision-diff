@@ -43,7 +43,7 @@ export const scopeQuery = (s: Scope) =>
 export type Me = { user_id: string | null; login: string | null; run_id: string | null };
 export type Dataset = { path: string; run_id: string; applications: number | null; before: number; after: number; excluded: string[] };
 export type Procedure = { id: string; kind: string; name: string; origin: "file" | "workspace"; path: string | null; sha: string; updated_at: string; mine: boolean; code?: string };
-export type Selection = { normalize: string; compare: string; segments: string; checks: string[] };
+export type Selection = { normalize: string; compare: string; segments: string; lineage?: string | null; checks: string[] };
 export type Config = { id: string; name: string; dataset: string | null; procedure_ids: Selection; params: Record<string, unknown>; updated_at: string };
 export type RunStats = { apps?: number; changed_apps?: number; mart_rows?: number; comparison_rows?: number; facts?: number };
 export type Run = {
