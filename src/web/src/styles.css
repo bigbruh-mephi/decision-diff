@@ -1,0 +1,114 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --bg: oklch(0.985 0.002 250);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.97 0.004 250);
+  --fg: oklch(0.21 0.015 255);
+  --muted: oklch(0.52 0.015 255);
+  --line: oklch(0.91 0.006 255);
+  --line-strong: oklch(0.84 0.01 255);
+  --accent: oklch(0.52 0.16 258);
+  --accent-bg: oklch(0.95 0.03 258);
+  --fail: oklch(0.55 0.2 27);
+  --fail-bg: oklch(0.96 0.03 27);
+  --fail-low: oklch(0.55 0.05 27);
+  --fail-low-bg: oklch(0.975 0.012 27);
+  --pass: oklch(0.52 0.11 152);
+  --pass-bg: oklch(0.96 0.03 152);
+  --warn: oklch(0.62 0.13 75);
+  --warn-bg: oklch(0.96 0.04 85);
+  --before: oklch(0.5 0.03 250);
+  --after: oklch(0.52 0.15 250);
+  --ct-changed: oklch(0.52 0.17 300);
+  --ct-new: oklch(0.55 0.11 190);
+  --ct-lost: oklch(0.62 0.14 65);
+  --ct-same: oklch(0.62 0.01 255);
+}
+
+[data-theme="dark"] {
+  --bg: oklch(0.17 0.01 255);
+  --surface: oklch(0.205 0.012 255);
+  --surface-2: oklch(0.235 0.013 255);
+  --fg: oklch(0.93 0.008 255);
+  --muted: oklch(0.68 0.015 255);
+  --line: oklch(0.29 0.013 255);
+  --line-strong: oklch(0.36 0.015 255);
+  --accent: oklch(0.72 0.13 258);
+  --accent-bg: oklch(0.28 0.05 258);
+  --fail: oklch(0.7 0.18 27);
+  --fail-bg: oklch(0.27 0.06 27);
+  --fail-low: oklch(0.68 0.05 27);
+  --fail-low-bg: oklch(0.23 0.02 27);
+  --pass: oklch(0.72 0.12 152);
+  --pass-bg: oklch(0.26 0.04 152);
+  --warn: oklch(0.78 0.13 80);
+  --warn-bg: oklch(0.28 0.05 80);
+  --before: oklch(0.7 0.03 250);
+  --after: oklch(0.74 0.12 250);
+  --ct-changed: oklch(0.72 0.14 300);
+  --ct-new: oklch(0.74 0.1 190);
+  --ct-lost: oklch(0.78 0.12 70);
+  --ct-same: oklch(0.6 0.01 255);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-bg: var(--accent-bg);
+  --color-fail: var(--fail);
+  --color-fail-bg: var(--fail-bg);
+  --color-fail-low: var(--fail-low);
+  --color-fail-low-bg: var(--fail-low-bg);
+  --color-pass: var(--pass);
+  --color-pass-bg: var(--pass-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-before: var(--before);
+  --color-after: var(--after);
+  --color-ct-changed: var(--ct-changed);
+  --color-ct-new: var(--ct-new);
+  --color-ct-lost: var(--ct-lost);
+  --color-ct-same: var(--ct-same);
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.cm-editor {
+  font-size: 12.5px;
+  height: 100%;
+}
+.cm-editor .cm-scroller {
+  font-family: var(--font-mono);
+}
