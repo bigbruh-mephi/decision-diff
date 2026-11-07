@@ -125,10 +125,17 @@ async def _login(c, user_id, login, response, run_id=None, days=auth.SESSION_DAY
 @app.post("/api/auth/login")
 async def login(body: Credentials, response: Response):
     async with pool().connection() as c:
+        failed = (await (await c.execute("""SELECT count(*) AS n FROM audit WHERE action = 'login.failed'
+                                            AND target = %s AND ts > now() - interval '15 minutes'""",
+                                         (body.login,))).fetchone())["n"]
+        if failed >= 10:
+            raise HTTPException(429, "too many failed attempts; try again in 15 minutes")
         row = await (await c.execute("SELECT id, password_hash FROM users WHERE login = %s",
                                      (body.login,))).fetchone()
         ok = auth.verify_password(row["password_hash"] if row else auth.hash_password("x" * 12), body.password)
         if not (row and ok):
+            await c.execute("INSERT INTO audit (action, target) VALUES ('login.failed', %s)", (body.login,))
+            await c.commit()
             raise HTTPException(401, "wrong login or password")
         await c.execute("INSERT INTO audit (user_id, action) VALUES (%s, 'login')", (row["id"],))
         return await _login(c, row["id"], body.login, response)
@@ -800,7 +807,11 @@ async def export_html(run_id: uuid.UUID, request: Request, s=Depends(session)):
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(request: Request):
+    """Prometheus metrics; protected by ``DD_METRICS_TOKEN`` (Bearer) when it is set."""
+    token = os.environ.get("DD_METRICS_TOKEN")
+    if token and request.headers.get("authorization") != f"Bearer {token}":
+        raise HTTPException(401, "metrics token required")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
