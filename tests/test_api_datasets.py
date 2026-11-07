@@ -50,3 +50,26 @@ def test_archive_entry_count_and_total_size_are_capped(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "MAX_UPLOAD", 3000)
     api._safe_extract(z, dest)
     assert len(list((dest / "RESULTS" / "BEFORE").iterdir())) == 3
+
+
+def test_archive_needs_a_fixed_reserve_not_a_share_of_the_disk(tmp_path, monkeypatch):
+    import shutil
+    import zipfile
+    from collections import namedtuple
+
+    import pytest
+    from fastapi import HTTPException
+
+    z = tmp_path / "a.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("RESULTS/BEFORE/A.json", "0" * 1000)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    usage = namedtuple("usage", "total used free")
+    gb = 1 << 30
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: usage(131 * gb, 127 * gb, 4 * gb))
+    api._safe_extract(z, dest)
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: usage(131 * gb, 130 * gb, gb))
+    with pytest.raises(HTTPException) as e:
+        api._safe_extract(z, dest)
+    assert e.value.code == "archive_too_large"

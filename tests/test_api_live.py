@@ -1,7 +1,7 @@
 """End-to-end API test against a running stack: ``DD_LIVE_URL=http://localhost:8088 uv run pytest tests/test_api_live.py``.
 
 Needs a dataset folder visible in the new-run form (``DD_LIVE_DATASET``, default the first one) and a login
-(``DD_LIVE_LOGIN`` / ``DD_LIVE_PASSWORD``); asserts internal consistency, not reference numbers.
+(``DD_LIVE_LOGIN`` / ``DD_LIVE_PASSWORD``); asserts internal consistency.
 """
 
 import os

@@ -32,6 +32,7 @@ REQUESTS = Counter("dd_http_requests_total", "HTTP requests", ["route", "status"
 LATENCY = Histogram("dd_http_request_seconds", "HTTP latency", ["route"])
 MAX_UPLOAD = 2 << 30
 MAX_ENTRIES = 300_000
+MIN_FREE = 1 << 30  # below this the broker stops accepting tasks, and runs hang
 STATE = {}
 
 
@@ -243,7 +244,7 @@ def _resolve_dataset(rel, s):
 
 def _safe_extract(zip_path, dest):
     """Extract after checking every member: inside ``dest``, at most MAX_ENTRIES files and MAX_UPLOAD bytes in total
-    (declared sizes; zipfile stops reading a member at its declared size), and leaving 10% of the volume free."""
+    (declared sizes; zipfile stops reading a member at its declared size), and leaving MIN_FREE on the volume."""
     with zipfile.ZipFile(zip_path) as z:
         members = z.infolist()
         if len(members) > MAX_ENTRIES:
@@ -257,7 +258,7 @@ def _safe_extract(zip_path, dest):
                                                                 "архив без абсолютных путей и «..».")
             total += info.file_size
         disk = shutil.disk_usage(dest)
-        if total > MAX_UPLOAD or total > disk.free - disk.total // 10:
+        if total > MAX_UPLOAD or total > disk.free - MIN_FREE:
             raise errors.Problem(413, "archive_too_large", f"После распаковки архив больше {MAX_UPLOAD >> 30} ГБ или "
                                                           "не помещается на диск датасетов.")
         z.extractall(dest)

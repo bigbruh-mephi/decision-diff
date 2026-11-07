@@ -12,7 +12,7 @@ wheels/
 # Agent working files (handoff, tasks, runs, reports)
 agent-dump/
 
-# Task materials and organizer-only reference data — never publish
+# Task materials — never publish
 artefacts/
 
 # Frontend

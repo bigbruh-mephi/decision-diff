@@ -67,20 +67,18 @@ function Shell() {
               {theme === "dark" ? "☀" : "☾"}
             </Button>
             <span>{shareOnly ? "просмотр по ссылке" : me.data?.login}</span>
-            {!shareOnly && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={async () => {
-                  await api.post("/api/auth/logout");
-                  queryClient.clear();
-                  nav({ to: "/" });
-                  me.refetch();
-                }}
-              >
-                Выйти
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                await api.post("/api/auth/logout");
+                queryClient.clear();
+                nav({ to: "/" });
+                me.refetch();
+              }}
+            >
+              {shareOnly ? "Войти" : "Выйти"}
+            </Button>
           </div>
         </div>
       </header>

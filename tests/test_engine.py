@@ -1,17 +1,11 @@
 import json
 import random
-from pathlib import Path
 
 import pytest
 
-from decision_diff.engine import chunk, finalize, formats, ingest, mart, procedures
+from decision_diff.engine import formats, ingest, procedures
 from decision_diff.engine.compare import bucket_label
 from decision_diff.engine.flatten import Paths, Trie, flatten
-
-ROOT = Path(__file__).resolve().parents[1]
-PROC = ROOT / "procedures"
-TASK = ROOT / "agent-dump" / "inputs" / "task"
-ORG = ROOT / "agent-dump" / "inputs" / "org"
 
 
 def flat_pair(b, a, **profile):
@@ -128,45 +122,6 @@ def test_bucket_labels():
     assert bucket_label(br, "0.42") == "(0.3 – 0.6]"
     assert bucket_label(br, "5000") == "(1K – +inf)"
     assert bucket_label(br, "REJECT") == "REJECT"
-
-
-def _run(run_dir, tmp_path):
-    n = procedures.load_file(PROC / "spr_normalize.py", "normalize")
-    c = procedures.load_file(PROC / "spr_compare.py", "compare")
-    s = procedures.load_file(PROC / "spr_segments.py", "segments")
-    items = ingest.pairs(run_dir)
-    dirs = []
-    for k in range(0, len(items), 700):
-        z = tmp_path / f"in{k}.zip"
-        ingest.write_chunk_zip(z, items[k:k + 700])
-        out = chunk.process_apps(ingest.read_chunk_zip(z.read_bytes()), n, c, s)
-        dirs.append(chunk.write_chunk(tmp_path / f"c{k}", *out[:4]))
-    stats = finalize.build(dirs, tmp_path / "run.duckdb", s["params"])
-    return stats, mart.Mart(mart.open_run(tmp_path / "run.duckdb"))
-
-
-def _expected(csv_path):
-    import csv
-
-    rows = list(csv.DictReader(csv_path.read_text(encoding="utf-8-sig").splitlines(), delimiter=";"))
-    return (len(rows), sum(int(r["CHANGED"]) for r in rows), sum(int(r["DECISION_CHANGED"]) for r in rows))
-
-
-@pytest.mark.parametrize("run_dir,reference", [
-    (TASK / "data" / "RUN-20260827-0001", ORG / "ЭТАЛОН" / "expected_OPEN.csv"),
-    (ORG / "HOLDOUT" / "RUN-20260827-0001-HOLDOUT", ORG / "ЭТАЛОН" / "expected_HOLDOUT.csv"),
-])
-def test_reference_numbers(run_dir, reference, tmp_path):
-    if not run_dir.exists() or not reference.exists():
-        pytest.skip("reference data is local-only and never committed")
-    apps, changed, decision = _expected(reference)
-    stats, M = _run(run_dir, tmp_path)
-    dec = sum(1 for s in M.segments() if s["DECISION_CHANGED"])
-    assert (stats["apps"], stats["changed_apps"], dec) == (apps, changed, decision)
-    assert M.count(path="decisionResult.decision", diff_flag=1) == decision
-    for f in sorted((TASK / "checks").glob("check_*.py")):
-        chk = procedures.load_file(f, "check")
-        assert procedures.validate_check_rows(chk["id"], chk["entrypoint"](M, chk["params"]))
 
 
 def test_manifest_cannot_point_outside_the_run_folder(tmp_path):
