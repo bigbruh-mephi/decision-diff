@@ -21,6 +21,7 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
   const rows = q.data?.apps ?? [];
   const v = useVirtualizer({ count: rows.length, getScrollElement: () => parent.current, estimateSize: () => 34, overscan: 12 });
   const scopeStr = Object.keys(scope).length ? JSON.stringify(scope) : undefined;
+  const path = drill?.cell?.PATH ?? drill?.path;
   return (
     <Card>
       <CardHeader
@@ -48,7 +49,7 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
                     key={a.app_id}
                     to="/runs/$runId/app/$appId"
                     params={{ runId, appId: a.app_id }}
-                    search={{ scope: scopeStr }}
+                    search={{ scope: scopeStr, path }}
                     className="absolute left-0 grid w-full grid-cols-[1fr_7rem_7rem_8rem_6rem] items-center border-b border-line px-4 text-[13px] hover:bg-surface-2"
                     style={{ top: it.start, height: it.size }}
                   >

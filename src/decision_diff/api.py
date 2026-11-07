@@ -41,7 +41,7 @@ async def lifespan(app):
     pool = await db.pool(max_size=20)
     await db.migrate(pool)
     async with pool.connection() as c:
-        await catalog.sync_files(c, settings.procedures_dir)
+        await catalog.sync_changed(c, settings.procedures_dir)
         admin, password = os.environ.get("DD_ADMIN_LOGIN"), os.environ.get("DD_ADMIN_PASSWORD")
         if admin and password:
             await c.execute("""INSERT INTO users (login, password_hash) VALUES (%s, %s)
@@ -275,6 +275,7 @@ async def upload_dataset(file: UploadFile, s=Depends(user)):
 @app.get("/api/procedures")
 async def list_procedures(s=Depends(user)):
     async with pool().connection() as c:
+        await catalog.sync_changed(c, settings.procedures_dir)
         rows = await (await c.execute("""
             SELECT id, kind, name, origin, path, sha, updated_at, owner_id = %s AS mine FROM procedures
             WHERE origin = 'file' OR owner_id = %s ORDER BY kind, origin, name""",
@@ -291,7 +292,11 @@ async def get_procedure(pid: uuid.UUID, s=Depends(user)):
                                      (pid, s["user_id"]))).fetchone()
     if not row:
         raise HTTPException(404, "procedure not found")
-    return j(row)
+    try:
+        declared = procedures.declaration(row["code"])[1].get("params")
+    except procedures.ProcedureError:
+        declared = None
+    return j({**row, "params": declared if isinstance(declared, dict) else {}})
 
 
 class Code(BaseModel):
@@ -433,6 +438,8 @@ async def create_run(body: RunBody, s=Depends(user)):
         except procedures.ProcedureError as e:
             raise HTTPException(422, str(e)) from e
         run_id = await db.create_run(c, s["user_id"], body.name or Path(dataset).name, snap, params, body.config_id)
+        if body.seal:
+            await c.execute("UPDATE runs SET seal_requested = true WHERE id = %s", (run_id,))
         await db.open_batch(c, run_id, str(source))
         await c.execute("INSERT INTO audit (user_id, action, target) VALUES (%s, 'run.create', %s)",
                         (s["user_id"], str(run_id)))
@@ -523,7 +530,7 @@ async def get_run(run_id: uuid.UUID, s=Depends(session)):
             GROUP BY state""", (run_id,))).fetchall()
     return j({**{k: row[k] for k in ("id", "name", "state", "apps", "total_chunks", "done_chunks", "failed_chunks",
                                      "stats", "error", "created_at", "sealed_at", "finished_at", "config_id",
-                                     "params")},
+                                     "params", "seal_requested")},
               "procedures": row["procedures"], "chunks": chunks})
 
 
@@ -713,10 +720,10 @@ async def app_detail(run_id: uuid.UUID, app_id: str, s=Depends(session)):
     if res is None:
         raise HTTPException(404, "application not in this run")
     async with pool().connection() as c:
-        checks = await (await c.execute("""SELECT check_id, label, r AS row FROM check_results,
-                                           jsonb_array_elements(rows) r
-                                           WHERE run_id = %s AND r->'APP_IDS' ? %s""", (run_id, app_id))).fetchall()
-    return j({**res, "checks": checks})
+        results = await (await c.execute("""SELECT DISTINCT ON (check_id) check_id, check_sha, label, rows
+                                            FROM check_results WHERE run_id = %s ORDER BY check_id, created_at DESC""",
+                                         (run_id,))).fetchall()
+    return j({**res, "checks": await asyncio.to_thread(rep.app_checks, app_id, results)})
 
 
 @app.get("/api/runs/{run_id}/checks")
@@ -862,7 +869,8 @@ async def export_html(run_id: uuid.UUID, request: Request, s=Depends(session)):
     """Self-contained HTML report (checks + verdict + clusters) with links back into the application."""
     rep, row = await _report(run_id, s)
     async with pool().connection() as c:
-        rows = await (await c.execute("""SELECT DISTINCT ON (check_id) check_id, label, rows, error FROM check_results
+        rows = await (await c.execute("""SELECT DISTINCT ON (check_id) check_id, check_sha, label, rows, error
+                                         FROM check_results
                                          WHERE run_id = %s ORDER BY check_id, created_at DESC""", (run_id,))).fetchall()
     base = str(request.base_url).rstrip("/")
     html = await asyncio.to_thread(export.render, rep, row, rows, base)

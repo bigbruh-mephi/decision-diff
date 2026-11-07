@@ -171,8 +171,9 @@ async def journal(c, run_id, chunk_no, stages):
             INSERT INTO stage_runs (run_id, chunk_no, stage, code_sha, status, started_at, duration_ms, rows_in,
                                     rows_out, error)
             VALUES (%s, %s, %s, %s, %s, to_timestamp(%s), %s, %s, %s, %s)
-            ON CONFLICT (run_id, chunk_no, stage) DO UPDATE SET status = excluded.status,
-                duration_ms = excluded.duration_ms, rows_out = excluded.rows_out, error = excluded.error""",
+            ON CONFLICT (run_id, chunk_no, stage) DO UPDATE SET status = excluded.status, code_sha = excluded.code_sha,
+                started_at = excluded.started_at, duration_ms = excluded.duration_ms, rows_out = excluded.rows_out,
+                error = excluded.error""",
                               [(run_id, chunk_no, s["stage"], s.get("code_sha"), s["status"], s["started_at"],
                                 s["duration_ms"], s.get("rows_in"), s.get("rows_out"), s.get("error"))
                                for s in stages])

@@ -3,10 +3,10 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { CodeView } from "../components/CodeView";
 import { Badge, Button, Card, CardHeader, ErrorBox, Mono, inputCls } from "../components/ui";
-import { api, type CellResult, type Procedure, type Run } from "../lib/api";
-import { n } from "../lib/format";
+import { api, type CellResult, type CheckResult, type Procedure, type Run } from "../lib/api";
+import { dt, plural } from "../lib/format";
 
-const CHECK_TEMPLATE = `# %% Новая автопроверка: контракт CHECK = {id, label, params, entrypoint}
+const checkTemplate = () => `# %% Новая автопроверка: контракт CHECK = {id, label, params, entrypoint}
 DEFAULTS = {"min_share": 0.05, "low_confidence_cnt": 5, "app_ids_limit": 20}
 
 
@@ -27,7 +27,7 @@ def run(mart, params=None):
     }]
 
 
-CHECK = {"id": "changed_same_decision", "label": "Различия есть, решение то же", "params": DEFAULTS, "entrypoint": run}
+CHECK = {"id": "changed_same_decision_${Math.random().toString(36).slice(2, 7)}", "label": "Различия есть, решение то же", "params": DEFAULTS, "entrypoint": run}
 
 # %% Попробовать на прогоне: последнее выражение ячейки показывается таблицей
 run(mart)
@@ -74,7 +74,7 @@ function Output({ res }: { res: CellResult }) {
         </div>
       )}
       {r.value && r.value.type !== "table" && <pre className="rounded bg-surface-2 p-2 font-mono">{r.value.repr}</pre>}
-      {r.check && <p className="text-pass">Проверка «{r.check.label}» вернула {r.check.rows.length} строк по контракту.</p>}
+      {r.check && <p className="text-pass">Проверка «{r.check.label}» вернула {plural(r.check.rows.length, "строку", "строки", "строк")} по контракту.</p>}
     </div>
   );
 }
@@ -87,7 +87,7 @@ export function WorkspacePage() {
   const runs = useQuery({ queryKey: ["runs"], queryFn: () => api.get<Run[]>("/api/runs") });
   const done = (runs.data ?? []).filter((r) => r.state === "done");
   const [runId, setRunId] = useState(runParam ?? "");
-  const [code, setCode] = useState(CHECK_TEMPLATE);
+  const [code, setCode] = useState(checkTemplate);
   const [current, setCurrent] = useState<Procedure | null>(null);
   const [results, setResults] = useState<Record<number, CellResult>>({});
   const [msg, setMsg] = useState<string | null>(null);
@@ -95,9 +95,12 @@ export function WorkspacePage() {
     if (!runId && done.length) setRunId(done[0].id);
   }, [done, runId]);
   useEffect(() => {
-    if (proc) api.get<Procedure>(`/api/procedures/${proc}`).then((p) => { setCurrent(p); setCode(p.code ?? ""); });
+    if (proc && proc !== current?.id) api.get<Procedure>(`/api/procedures/${proc}`).then((p) => { setCurrent(p); setCode(p.code ?? ""); setMsg(null); });
   }, [proc]);
   const parts = useMemo(() => cells(code), [code]);
+  const runChecks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`), enabled: !!runId });
+  const checkId = /^CHECK\s*=\s*\{[^}]*?["']id["']\s*:\s*["']([^"']+)["']/m.exec(code)?.[1];
+  const taken = checkId && runChecks.data?.find((c) => c.check_id === checkId);
 
   const runCell = async (upto: number) => {
     const text = parts.slice(0, upto + 1).map((c) => c.text).join("\n");
@@ -137,7 +140,7 @@ export function WorkspacePage() {
   return (
     <div className="grid gap-4 xl:grid-cols-[260px_1fr]">
       <Card className="h-fit">
-        <CardHeader title="Процедуры" hint="📄 файлы в системе · ✎ рабочая область" actions={<Button size="sm" onClick={() => { setCurrent(null); setCode(CHECK_TEMPLATE); nav({ to: "/workspace", search: { run: runId || undefined } }); }}>Новая</Button>} />
+        <CardHeader title="Процедуры" hint="📄 файлы в системе · ✎ рабочая область" actions={<Button size="sm" onClick={() => { setCurrent(null); setCode(checkTemplate()); nav({ to: "/workspace", search: { run: runId || undefined } }); }}>Новая</Button>} />
         <ul className="max-h-[70vh] overflow-y-auto py-1">
           {(procs.data ?? []).map((p) => (
             <li key={p.id}>
@@ -160,7 +163,7 @@ export function WorkspacePage() {
               <select className={inputCls + " h-7 text-xs"} value={runId} onChange={(e) => setRunId(e.target.value)} aria-label="Прогон для запуска">
                 <option value="">без прогона</option>
                 {done.map((r) => (
-                  <option key={r.id} value={r.id}>{r.name} · {n(r.apps)} заявок</option>
+                  <option key={r.id} value={r.id}>{r.name} · {dt(r.created_at)} · {plural(r.apps, "заявка", "заявки", "заявок")}</option>
                 ))}
               </select>
               <Button size="sm" onClick={() => runCell(parts.length - 1)} disabled={!runId}>Выполнить всё</Button>
@@ -169,6 +172,11 @@ export function WorkspacePage() {
             </div>
           </div>
           {msg && <p className="border-b border-line bg-pass-bg px-4 py-1.5 text-xs text-pass">{msg}</p>}
+          {taken && (
+            <p role="status" className="border-b border-line bg-warn-bg px-4 py-1.5 text-xs text-warn">
+              В прогоне уже есть проверка с id <Mono>{checkId}</Mono> («{taken.label}»): при применении её строки в отчёте заменятся строками этого кода. Для новой проверки задайте другой id в CHECK.
+            </p>
+          )}
           {(save.error || addToReport.error) && <ErrorBox error={save.error ?? addToReport.error} />}
           <div className="p-3">
             <CodeView value={code} onChange={setCode} />

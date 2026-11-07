@@ -1,6 +1,6 @@
 import { Card, CardHeader } from "../../components/ui";
 import type { Run } from "../../lib/api";
-import { STATE, n, pct } from "../../lib/format";
+import { STATE, n, pct, plural } from "../../lib/format";
 
 const STEPS: { state: Run["state"][]; label: string }[] = [
   { state: ["receiving"], label: "Приём и нарезка порций" },
@@ -42,7 +42,7 @@ export function Progress({ run, live }: { run: Run; live: { type: string; data: 
           <div>
             <div className="mb-1 flex justify-between text-xs text-muted">
               <span>Порции: {done?.n ?? 0} из {run.total_chunks ?? (total || "…")}</span>
-              <span className="num">{n(processed)} из {n(run.apps)} заявок</span>
+              <span className="num">{n(processed)} из {plural(run.apps, "заявки", "заявок", "заявок")}</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuenow={processed} aria-valuemax={run.apps}>
               <div className="h-full bg-accent transition-all" style={{ width: `${run.apps ? (processed / run.apps) * 100 : 0}%` }} />
@@ -70,7 +70,7 @@ export function Progress({ run, live }: { run: Run; live: { type: string; data: 
           {[...live].reverse().slice(0, 80).map((e, i) => (
             <li key={i} className="flex gap-2">
               <span className="text-accent">{e.type}</span>
-              <span className="truncate text-muted">{e.type === "chunk.done" ? `#${e.data.chunk_no} · ${e.data.apps} заявок · ${e.data.changed_apps} с различиями` : JSON.stringify(e.data)}</span>
+              <span className="truncate text-muted">{e.type === "chunk.done" ? `#${e.data.chunk_no} · ${plural(Number(e.data.apps), "заявка", "заявки", "заявок")} · ${e.data.changed_apps} с различиями` : JSON.stringify(e.data)}</span>
             </li>
           ))}
           {!live.length && <li className="text-muted">ожидание событий…</li>}

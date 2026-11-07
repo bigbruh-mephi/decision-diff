@@ -3,7 +3,7 @@ import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Badge, Card, CardHeader, ChangeGlyph, ErrorBox, Mono, Skeleton, cx, inputCls } from "../components/ui";
 import { api, type AppDetail, type Summary } from "../lib/api";
-import { n } from "../lib/format";
+import { n, plural } from "../lib/format";
 
 export function AppDetailPage() {
   const { runId, appId } = useParams({ strict: false }) as { runId: string; appId: string };
@@ -13,14 +13,14 @@ export function AppDetailPage() {
   const [showSame, setShowSame] = useState(false);
   const [q, setQ] = useState(path ?? "");
   const groups = useMemo(() => {
-    const rows = (app.data?.rows ?? []).filter((r) => (showSame || r.CHANGE_TYPE !== "SAME") && (!q || r.PATH.includes(q) || r.ARRAY_KEY.includes(q)));
+    const rows = (app.data?.rows ?? []).filter((r) => (showSame || r.CHANGE_TYPE !== "SAME" || r.PATH === path) && (!q || r.PATH.includes(q) || r.ARRAY_KEY.includes(q)));
     const m = new Map<string, typeof rows>();
     for (const r of rows.sort((a, b) => Number(a.CHANGE_TYPE === "SAME") - Number(b.CHANGE_TYPE === "SAME"))) {
       const k = r.CLASS ? `${r.PREFIX}.${r.CLASS}` : r.PREFIX;
       m.set(k, [...(m.get(k) ?? []), r]);
     }
     return [...m.entries()];
-  }, [app.data, showSame, q]);
+  }, [app.data, showSame, q, path]);
   if (app.isLoading) return <Skeleton rows={10} />;
   if (app.error || !app.data) return <ErrorBox error={app.error} />;
   const a = app.data;
@@ -45,7 +45,7 @@ export function AppDetailPage() {
             </Link>
           )}
         </h1>
-        <p className="num text-xs text-muted">{n(a.rows.length)} атрибутов · изменилось {n(changed)} · без изменений {n(same)}</p>
+        <p className="num text-xs text-muted">{plural(a.rows.length, "атрибут", "атрибута", "атрибутов")} · изменилось {n(changed)} · без изменений {n(same)}</p>
       </div>
       <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
         <Card>

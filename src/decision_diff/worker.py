@@ -140,12 +140,17 @@ class Worker:
                     snaps = await self.snapshots(run["procedures"])
                     stats, stages = await self.cpu_trusted(pipeline.build_run, dirs, str(run_file),
                                                            run["report_params"] or {})
-                    t_checks = time.time()
+                    if snaps.get("lineage"):
+                        stages.append({**stages[0], "stage": "lineage", "code_sha": snaps["lineage"]["sha"],
+                                       "duration_ms": 0, "rows_in": None,
+                                       "rows_out": len(((run["report_params"] or {}).get("lineage") or {})
+                                                       .get("stages") or [])})
                     checks = [r for part in await asyncio.gather(*(
                         self.cpu(pipeline.run_checks, str(run_file), [snap]) for snap in snaps["checks"])) for r in part]
-                    stages.append({"stage": "checks", "code_sha": None, "status": "done", "started_at": t_checks,
-                                   "duration_ms": (time.time() - t_checks) * 1000, "rows_in": len(snaps["checks"]),
-                                   "rows_out": sum(len(r["rows"]) for r in checks), "error": None})
+                    stages += [{"stage": f"check:{r['check_id']}", "code_sha": r["sha"],
+                                "status": "failed" if r["error"] else "done", "started_at": r["started_at"],
+                                "duration_ms": r["duration_ms"], "rows_in": None, "rows_out": len(r["rows"]),
+                                "error": r["error"]} for r in checks]
                 except Exception as e:
                     await c.execute("UPDATE runs SET state = 'failed', error = %s, finished_at = now() WHERE id = %s",
                                     (f"finalize: {type(e).__name__}: {e}", run_id))
@@ -231,12 +236,17 @@ class Worker:
             checks = await (await c.execute("""SELECT DISTINCT ON (check_id) label, rows FROM check_results
                                                WHERE run_id = %s ORDER BY check_id, created_at DESC""",
                                             (run_id,))).fetchall()
+        t0 = time.time()
         try:
             res = await self.cpu_trusted(ai.opinion, str(settings.run_dir(run_id) / "run.duckdb"),
                                          row["report_params"] or {}, checks)
         except Exception as e:
             res = {"state": "failed", "model": settings.llm_model, "findings": [], "error": f"{type(e).__name__}: {e}"}
         async with self.pool.connection() as c:
+            await db.journal(c, run_id, -1, [{"stage": "ai", "code_sha": None, "started_at": t0,
+                                              "status": "done" if res["state"] == "done" else "failed",
+                                              "duration_ms": (time.time() - t0) * 1000, "rows_in": len(checks),
+                                              "rows_out": len(res["findings"]), "error": res.get("error")}])
             await c.execute("UPDATE ai_opinions SET state = %s, model = %s, result = %s, finished_at = now() "
                             "WHERE run_id = %s", (res["state"], res["model"], Jsonb(res), run_id))
             await db.event(c, run_id, "ai.done", {"state": res["state"], "findings": len(res["findings"])})

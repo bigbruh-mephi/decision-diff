@@ -8,7 +8,7 @@ logic = values the strategy computes, outcome = what the client gets.
 
 PROCEDURE = {
     "id": "spr_lineage",
-    "label": "SPR responses: decision lineage (input -> features -> models -> cut-off -> rules -> decision -> offers)",
+    "label": "Ответы СПР: цепочка решения (вход -> признаки -> модели -> порог -> правила -> решение -> офферы)",
     "kind": "lineage",
     "params": {
         "stages": [

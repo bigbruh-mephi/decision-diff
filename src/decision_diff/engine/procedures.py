@@ -84,8 +84,9 @@ def validate_check_rows(check_id, rows):
 def declaration(code, name="<workspace>"):
     """Literal entries of the ``PROCEDURE`` (or ``CHECK``) dict assignment, read WITHOUT executing the code.
 
-    Returns ``(variable name, {key: literal})``; non-literal entries (``entrypoint``) are left out. A what-if
-    declaration (``unit_depth``, ``inputs``, ``outcome``, ``params``) is read this way by trusted code.
+    Returns ``(variable name, {key: literal})``; an entry naming a module-level literal (``"params": DEFAULTS``)
+    takes that literal, other non-literal entries (``entrypoint``) are left out. A what-if declaration
+    (``unit_depth``, ``inputs``, ``outcome``, ``params``) is read this way by trusted code.
     Raises :class:`ProcedureError` on syntax errors or a missing contract.
     """
     import ast
@@ -94,16 +95,22 @@ def declaration(code, name="<workspace>"):
         tree = ast.parse(code, name)
     except SyntaxError as e:
         raise ProcedureError(f"{name}:{e.lineno}: {e.msg}") from e
-    found = {}
+    found, consts = {}, {}
     for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
-                and node.targets[0].id in ("PROCEDURE", "CHECK") and isinstance(node.value, ast.Dict):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            continue
+        if node.targets[0].id in ("PROCEDURE", "CHECK") and isinstance(node.value, ast.Dict):
             meta = {}
             for k, v in zip(node.value.keys, node.value.values):
                 if isinstance(k, ast.Constant):
+                    if isinstance(v, ast.Name) and v.id in consts:
+                        meta[k.value] = consts[v.id]
                     with contextlib.suppress(ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
                         meta[k.value] = ast.literal_eval(v)
             found[node.targets[0].id] = meta
+        else:
+            with contextlib.suppress(ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                consts[node.targets[0].id] = ast.literal_eval(node.value)
     var = "PROCEDURE" if "PROCEDURE" in found else "CHECK" if "CHECK" in found else None
     if var is None:
         raise ProcedureError(f"{name}: module must assign a literal PROCEDURE or CHECK dict")

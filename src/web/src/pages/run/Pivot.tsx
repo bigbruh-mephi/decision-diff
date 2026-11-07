@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Fragment, useMemo, useState } from "react";
 import { Badge, Button, Card, CardHeader, ChangeGlyph, ErrorBox, Skeleton, cx } from "../../components/ui";
 import { api, type Fields, type Pivot, type Scope } from "../../lib/api";
-import { n } from "../../lib/format";
+import { n, plural } from "../../lib/format";
 import { useScopeNav } from "../Run";
 
 const PRESETS: { name: string; rows: string[]; cols: string[]; filters: Record<string, string[]> }[] = [
@@ -13,6 +13,16 @@ const PRESETS: { name: string; rows: string[]; cols: string[]; filters: Record<s
 ];
 
 type Zone = "rows" | "cols" | "filters";
+
+const ORDER: Record<string, number> = { BEFORE: 0, AFTER: 1 };
+
+const byKey = (a: string[], b: string[]) => {
+  for (let i = 0; i < a.length; i++) {
+    const d = (ORDER[a[i]] ?? 2) - (ORDER[b[i]] ?? 2) || a[i].localeCompare(b[i]);
+    if (d) return d;
+  }
+  return 0;
+};
 
 function Chip({ name, onDragStart, onRemove }: { name: string; onDragStart: () => void; onRemove?: () => void }) {
   return (
@@ -76,15 +86,16 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
       colKeys.set(k.join("\u0000"), k);
       cell.set(r.join("\u0000") + "\u0001" + k.join("\u0000"), Number(c[c.length - 1]));
     }
-    const cols = [...colKeys.values()].sort((a, b) => a.join().localeCompare(b.join()));
-    const rows = [...rowKeys.values()].sort((a, b) => a.join("\u0000").localeCompare(b.join("\u0000")));
-    return { rows, cols, cell, rowDims: p.rows, colDims: p.cols, filters: p.filters };
+    const cols = [...colKeys.values()].sort(byKey);
+    const rows = [...rowKeys.values()].sort(byKey);
+    const total = (t?: (string | number)[][]) => (t ? new Map(t.map((x) => [x.slice(0, -1).map(String).join("\u0000"), Number(x[x.length - 1])])) : null);
+    return { rows, cols, cell, rowDims: p.rows, colDims: p.cols, filters: p.filters, rowTotal: p.cols.length ? total(p.row_totals) : null, colTotal: p.rows.length ? total(p.col_totals) : null, total: p.total };
   }, [pivot.data]);
 
   const openCell = (r: string[], c: string[]) => {
     const spec: Record<string, string> = {};
-    table!.rowDims.forEach((d, i) => (spec[d] = r[i]));
-    table!.colDims.forEach((d, i) => (spec[d] = c[i]));
+    table!.rowDims.forEach((d, i) => r.length && (spec[d] = r[i]));
+    table!.colDims.forEach((d, i) => c.length && (spec[d] = c[i]));
     const clusterVal = spec.CLUSTER;
     delete spec.CLUSTER;
     const sc = clusterVal && clusterVal !== "none" ? { ...scope, cluster: Number(clusterVal) } : scope;
@@ -166,8 +177,8 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
         <Card>
           <CardHeader
             title="Сводная таблица"
-            hint="Значения — точное число различных заявок (не сумма строк). Клик по числу открывает заявки"
-            actions={pivot.data && <Badge>{pivot.data.cells.length} ячеек · {pivot.data.ms} мс сервер{pivot.isFetching ? " · обновление…" : ""}</Badge>}
+            hint="Значения и итоги — точное число различных заявок (не сумма строк). Клик по числу открывает заявки"
+            actions={pivot.data && <Badge>{plural(pivot.data.cells.length, "ячейка", "ячейки", "ячеек")} · {pivot.data.ms} мс сервер{pivot.isFetching ? " · обновление…" : ""}</Badge>}
           />
           {pivot.error && <ErrorBox error={pivot.error} />}
           {!table && <Skeleton rows={8} />}
@@ -184,6 +195,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                         {c.length ? c.map((x, i) => <Fragment key={i}>{i > 0 && " · "}<Header k={x} /></Fragment>) : "заявок"}
                       </th>
                     ))}
+                    {table.rowTotal && <th className="border-b border-l border-line-strong px-2 py-1.5 text-right text-[11px] font-semibold" title="Различные заявки строки по всем колонкам">Итого</th>}
                   </tr>
                 </thead>
                 <tbody className={cx(pivot.isFetching && "opacity-60 transition-opacity")}>
@@ -209,13 +221,35 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                           </td>
                         );
                       })}
+                      {table.rowTotal && (
+                        <td className="num border-b border-l border-line-strong px-2 py-1 text-right font-medium">
+                          <button onClick={() => openCell(r, [])} className="text-accent hover:underline">{n(table.rowTotal.get(r.join("\u0000")))}</button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
+                {table.colTotal && (
+                  <tfoot className="sticky bottom-0 bg-surface font-medium">
+                    <tr>
+                      <td colSpan={table.rowDims.length} className="border-t border-line-strong px-2 py-1.5 text-xs font-semibold" title="Различные заявки колонки по всем строкам">Итого</td>
+                      {table.cols.map((c) => (
+                        <td key={c.join()} className="num border-l border-t border-line-strong px-2 py-1 text-right">
+                          <button onClick={() => openCell([], c)} className="text-accent hover:underline">{n(table.colTotal!.get(c.join("\u0000")))}</button>
+                        </td>
+                      ))}
+                      {table.rowTotal && (
+                        <td className="num border-l border-t border-line-strong px-2 py-1 text-right font-semibold">
+                          <button onClick={() => openCell([], [])} className="text-accent hover:underline">{n(table.total)}</button>
+                        </td>
+                      )}
+                    </tr>
+                  </tfoot>
+                )}
               </table>
               {table.rows.length > maxRows && (
                 <button className="w-full py-2 text-xs text-accent" onClick={() => setCollapsed(false)}>
-                  показано {maxRows} из {table.rows.length} строк — показать больше
+                  показано {n(maxRows)} из {plural(table.rows.length, "строки", "строк", "строк")} — показать больше
                 </button>
               )}
             </div>

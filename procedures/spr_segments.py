@@ -40,7 +40,7 @@ def run(before, after, params):
 
 PROCEDURE = {
     "id": "spr_segments",
-    "label": "SPR responses: segments layer (decision, products, target model, cut-off, external score)",
+    "label": "Ответы СПР: слой разрезов (решение, продукты, целевая модель, порог, внешний скор)",
     "kind": "segments",
     "params": {"multi_valued": {"PRODUCTS": ";", "PARTNER_TYPE": ";", "ROUTING_METHOD": ";"},
                "decision_field": "DECISION",

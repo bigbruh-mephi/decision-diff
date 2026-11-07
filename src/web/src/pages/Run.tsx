@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Badge, Button, ErrorBox, Skeleton, Tabs, inputCls } from "../components/ui";
 import { api, type Dataset, type Run, type Scope } from "../lib/api";
 import { useRunEvents } from "../lib/events";
-import { n } from "../lib/format";
+import { plural } from "../lib/format";
 import { StateBadge } from "./Runs";
 import { AppList } from "./run/AppList";
 import { ChecksView } from "./run/Checks";
@@ -38,7 +38,7 @@ export function useScopeNav(runId: string) {
     });
 }
 
-export type Drill = { cell?: Record<string, string>; filters?: Record<string, string[]>; transition?: { path_id: number; before: string; after: string }; title?: string };
+export type Drill = { cell?: Record<string, string>; path?: string; filters?: Record<string, string[]>; transition?: { path_id: number; before: string; after: string }; title?: string };
 
 export function parseDrill(raw?: string): Drill | undefined {
   try {
@@ -61,7 +61,8 @@ function ScopeBar({ runId, name, scope }: { runId: string; name: string; scope: 
       },
     });
   if (scope.cluster) chips.push({ label: `кластер №${scope.cluster}`, drop: () => go({ ...scope, cluster: undefined }) });
-  if (scope.apps) chips.push({ label: `${scope.apps.length} заявок из проверки`, drop: () => go({ ...scope, apps: undefined }) });
+  if (scope.apps) chips.push({ label: plural(scope.apps.length, "выбранная заявка", "выбранные заявки", "выбранных заявок"), drop: () => go({ ...scope, apps: undefined }) });
+  if (scope.check) chips.push({ label: `${plural(scope.check.cnt, "заявка", "заявки", "заявок")} строки проверки`, drop: () => go({ ...scope, check: undefined }) });
   return (
     <nav aria-label="Текущий срез" className="flex flex-wrap items-center gap-1.5 text-xs">
       <button onClick={() => go({})} className="font-medium text-accent hover:underline">
@@ -136,8 +137,8 @@ export function RunPage() {
             {r.name} <StateBadge state={r.state} />
           </h1>
           <p className="num text-xs text-muted">
-            {n(r.apps)} заявок · {r.total_chunks ?? "…"} порций
-            {r.stats?.mart_rows ? <> · витрина {n(r.stats.mart_rows)} строк</> : null}
+            {plural(r.apps, "заявка", "заявки", "заявок")} · {r.total_chunks != null ? plural(r.total_chunks, "порция", "порции", "порций") : "… порций"}
+            {r.stats?.mart_rows ? <> · витрина {plural(r.stats.mart_rows, "строка", "строки", "строк")}</> : null}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -165,7 +166,7 @@ export function RunPage() {
           <Button size="sm" variant="danger" onClick={() => api.del(`/api/runs/${runId}/share`).then(() => share.reset())}>Отозвать все ссылки</Button>
         </div>
       )}
-      {r.state === "receiving" && <BatchControls run={r} />}
+      {r.state === "receiving" && !r.seal_requested && <BatchControls run={r} />}
       {r.error && <ErrorBox error={r.error} />}
       <Tabs
         value={tab}

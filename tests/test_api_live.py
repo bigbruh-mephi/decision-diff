@@ -41,7 +41,8 @@ def run_id(client):
         assert time.time() < deadline, "run did not finish in 10 minutes"
         time.sleep(0.5)
     assert st["state"] == "done", st.get("error")
-    return rid
+    yield rid
+    client.delete(f"/api/configs/{cfg['id']}")
 
 
 def test_report_is_consistent(client, run_id):
@@ -80,3 +81,16 @@ def test_share_link_is_read_only_and_revocable(client, run_id):
     assert viewer.post("/api/cells", json={"code": "1"}).status_code == 403
     assert client.delete(f"/api/runs/{run_id}/share").status_code == 204
     assert viewer.get(f"/api/runs/{run_id}/summary").status_code == 401
+
+
+def test_config_delete_is_owner_only(client, run_id):
+    cfg = client.get("/api/configs").json()[0]
+    mine = client.post("/api/configs", json={"name": "delete me", "dataset": cfg["dataset"],
+                                             "procedures": cfg["procedure_ids"]}).json()
+    token = client.post(f"/api/runs/{run_id}/share").json()["url"].rsplit("/", 1)[1]
+    viewer = httpx.Client(base_url=BASE, headers={"Sec-Fetch-Site": "same-origin"})
+    viewer.headers["Cookie"] = viewer.get(f"/s/{token}").headers["set-cookie"].split(";", 1)[0]
+    assert viewer.delete(f"/api/configs/{mine['id']}").status_code == 403
+    assert client.delete(f"/api/configs/{mine['id']}").status_code == 200
+    assert mine["id"] not in {c["id"] for c in client.get("/api/configs").json()}
+    client.delete(f"/api/runs/{run_id}/share")

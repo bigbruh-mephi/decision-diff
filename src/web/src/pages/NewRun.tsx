@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, CardHeader, ErrorBox, Field, Skeleton, inputCls } from "../components/ui";
 import { api, type Config, type Dataset, type Procedure, type Run, type Selection } from "../lib/api";
-import { n } from "../lib/format";
+import { dt, n, plural } from "../lib/format";
 
 const STAGES: { kind: "normalize" | "compare" | "segments"; title: string; hint: string }[] = [
   { kind: "normalize", title: "Приведение (нормализация)", hint: "Ключи массивов, исключения, бакеты, переименования" },
@@ -31,6 +31,59 @@ function ProcSelect({ items, value, onChange }: { items: Procedure[]; value: str
   );
 }
 
+type Params = Record<string, Record<string, unknown>>;
+
+function ParamsEditor({ id, name, value, onChange, onValid }: { id: string; name: string; value: Record<string, unknown> | undefined; onChange: (v: Record<string, unknown> | undefined) => void; onValid: (ok: boolean) => void }) {
+  const proc = useQuery({ queryKey: ["procedure", id], queryFn: () => api.get<Procedure>(`/api/procedures/${id}`) });
+  const declared = proc.data?.params ?? {};
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const changed = Object.keys(value ?? {});
+  const edit = (t: string) => {
+    setText(t);
+    try {
+      const v = JSON.parse(t);
+      if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("нужен объект {\"параметр\": значение}");
+      const diff = Object.fromEntries(Object.entries(v).filter(([k, x]) => JSON.stringify(x) !== JSON.stringify(declared[k])));
+      setError(null);
+      onValid(true);
+      onChange(Object.keys(diff).length ? diff : undefined);
+    } catch (e) {
+      setError(e instanceof SyntaxError ? `Неверный JSON: ${e.message}` : e instanceof Error ? e.message : String(e));
+      onValid(false);
+    }
+  };
+  return (
+    <details className="rounded border border-line px-3 py-1.5">
+      <summary className="flex cursor-pointer items-center gap-2 text-[13px]">
+        <span className="min-w-0 flex-1 truncate">{name}</span>
+        {error ? <Badge tone="fail">ошибка JSON</Badge> : changed.length ? <Badge tone="accent">изменено: {changed.join(", ")}</Badge> : <Badge>по умолчанию</Badge>}
+      </summary>
+      {proc.isLoading && <Skeleton rows={2} />}
+      {proc.data && (
+        <div className="flex flex-col gap-1 py-2">
+          <textarea
+            className={inputCls + " h-auto min-h-24 py-1.5 font-mono text-[12px]"}
+            rows={Math.min(14, JSON.stringify({ ...declared, ...value }, null, 2).split("\n").length)}
+            spellCheck={false}
+            value={text ?? JSON.stringify({ ...declared, ...value }, null, 2)}
+            onChange={(e) => edit(e.target.value)}
+            aria-label={`Параметры: ${name}`}
+          />
+          {error ? (
+            <span className="text-[11px] text-fail">{error}</span>
+          ) : (
+            <span className="text-[11px] text-muted">
+              Действующие значения: объявленные в коде процедуры, поверх них ваши изменения. Сохраняются в конфигурации и прогоне.
+              {changed.length > 0 && <button className="ml-2 text-accent hover:underline" onClick={() => { setText(null); onChange(undefined); }}>сбросить</button>}
+            </span>
+          )}
+        </div>
+      )}
+    </details>
+  );
+}
+
 export function NewRunPage() {
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -47,6 +100,8 @@ export function NewRunPage() {
   const [sel, setSel] = useState<Selection | null>(null);
   const [configId, setConfigId] = useState<string>("");
   const [incremental, setIncremental] = useState(false);
+  const [params, setParams] = useState<Params>({});
+  const [invalid, setInvalid] = useState<string[]>([]);
 
   useEffect(() => {
     if (!sel && procs.data)
@@ -69,6 +124,8 @@ export function NewRunPage() {
       setSel(c.procedure_ids);
       if (c.dataset) setDataset(c.dataset);
       setName(c.name);
+      setParams((c.params ?? {}) as Params);
+      setInvalid([]);
     }
   };
 
@@ -83,18 +140,28 @@ export function NewRunPage() {
       setDataset(d.path);
     },
   });
+  const chosen = sel ? [sel.normalize, sel.compare, sel.segments, ...(sel.lineage ? [sel.lineage] : []), ...sel.checks].filter(Boolean) : [];
+  const chosenParams = Object.fromEntries(Object.entries(params).filter(([k]) => chosen.includes(k)));
+  const blocked = invalid.some((k) => chosen.includes(k));
   const saveConfig = useMutation({
     mutationFn: () =>
       configId
-        ? api.put<Config>(`/api/configs/${configId}`, { name: name || dataset, dataset, procedures: sel })
-        : api.post<Config>("/api/configs", { name: name || dataset, dataset, procedures: sel }),
+        ? api.put<Config>(`/api/configs/${configId}`, { name: name || dataset, dataset, procedures: sel, params: chosenParams })
+        : api.post<Config>("/api/configs", { name: name || dataset, dataset, procedures: sel, params: chosenParams }),
     onSuccess: (c) => {
       setConfigId(c.id);
       qc.invalidateQueries({ queryKey: ["configs"] });
     },
   });
+  const removeConfig = useMutation({
+    mutationFn: (id: string) => api.del(`/api/configs/${id}`),
+    onSuccess: (_, id) => {
+      if (configId === id) setConfigId("");
+      qc.invalidateQueries({ queryKey: ["configs"] });
+    },
+  });
   const start = useMutation({
-    mutationFn: () => api.post<Run>("/api/runs", { name: name || undefined, dataset, procedures: sel, config_id: configId || undefined, seal: !incremental }),
+    mutationFn: () => api.post<Run>("/api/runs", { name: name || undefined, dataset, procedures: sel, params: chosenParams, config_id: configId || undefined, seal: !incremental }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["runs"] });
       nav({ to: "/runs/$runId", params: { runId: r.id }, search: {} });
@@ -111,14 +178,23 @@ export function NewRunPage() {
       </div>
       {configs.data && configs.data.length > 0 && (
         <Card>
-          <CardHeader title="Сохранённые конфигурации" />
-          <div className="flex flex-wrap gap-2 p-4">
+          <CardHeader title="Сохранённые конфигурации" hint="Последние изменённые сверху" />
+          <ul className="max-h-60 divide-y divide-line overflow-y-auto">
             {configs.data.map((c) => (
-              <Button key={c.id} size="sm" variant={configId === c.id ? "primary" : "secondary"} onClick={() => applyConfig(c.id)}>
-                {c.name}
-              </Button>
+              <li key={c.id} className="flex items-center gap-2 px-4 py-1.5">
+                <Button size="sm" variant={configId === c.id ? "primary" : "secondary"} onClick={() => applyConfig(c.id)}>
+                  {c.name}
+                </Button>
+                <span className="min-w-0 flex-1 truncate text-xs text-muted">
+                  {dt(c.updated_at)} · {c.dataset ?? "без датасета"} · {plural(c.procedure_ids.checks.length, "проверка", "проверки", "проверок")}
+                  {Object.keys(c.params ?? {}).length > 0 && " · свои параметры"}
+                </span>
+                <Button size="sm" variant="ghost" aria-label={`Удалить конфигурацию ${c.name}`} disabled={removeConfig.isPending} onClick={() => confirm(`Удалить конфигурацию «${c.name}»? Прогоны останутся.`) && removeConfig.mutate(c.id)}>
+                  Удалить
+                </Button>
+              </li>
             ))}
-          </div>
+          </ul>
         </Card>
       )}
       <Card>
@@ -128,7 +204,7 @@ export function NewRunPage() {
             <select className={inputCls} value={dataset} onChange={(e) => setDataset(e.target.value)}>
               {(datasets.data ?? []).map((d) => (
                 <option key={d.path} value={d.path}>
-                  {d.path} · {n(d.before)} / {n(d.after)} ответов
+                  {d.path} · {n(d.before)} / {plural(d.after, "ответ", "ответа", "ответов")}
                 </option>
               ))}
             </select>
@@ -190,6 +266,26 @@ export function NewRunPage() {
           </div>
         </Card>
       )}
+      {sel && (
+        <Card>
+          <CardHeader title="4. Параметры процедур" hint="JSON поверх параметров, объявленных в коде; раскройте процедуру, чтобы изменить" />
+          <div className="grid gap-1.5 p-4">
+            {chosen.map((id) => {
+              const p = procs.data?.find((x) => x.id === id);
+              return p ? (
+                <ParamsEditor
+                  key={id + configId}
+                  id={id}
+                  name={`${p.name} · ${p.kind}`}
+                  value={params[id]}
+                  onChange={(v) => setParams((cur) => { const next = { ...cur }; if (v) next[id] = v; else delete next[id]; return next; })}
+                  onValid={(ok) => setInvalid((cur) => (ok ? cur.filter((x) => x !== id) : [...new Set([...cur, id])]))}
+                />
+              ) : null;
+            })}
+          </div>
+        </Card>
+      )}
       <Card>
         <div className="flex flex-wrap items-end gap-3 p-4">
           <Field label="Название прогона">
@@ -200,15 +296,16 @@ export function NewRunPage() {
             принимать догрузку порций
           </label>
           <div className="ml-auto flex gap-2">
-            <Button onClick={() => saveConfig.mutate()} disabled={!sel || saveConfig.isPending}>
+            <Button onClick={() => saveConfig.mutate()} disabled={!sel || blocked || saveConfig.isPending}>
               {configId ? "Обновить конфигурацию" : "Сохранить конфигурацию"}
             </Button>
-            <Button variant="primary" onClick={() => start.mutate()} disabled={!sel || !dataset || start.isPending}>
+            <Button variant="primary" onClick={() => start.mutate()} disabled={!sel || !dataset || blocked || start.isPending}>
               {start.isPending ? "Отправка…" : "Запустить"}
             </Button>
           </div>
         </div>
-        {(start.error || saveConfig.error) && <ErrorBox error={start.error ?? saveConfig.error} />}
+        {blocked && <p className="px-4 pb-3 text-xs text-fail">Исправьте JSON параметров, чтобы сохранить или запустить</p>}
+        {(start.error || saveConfig.error || removeConfig.error) && <ErrorBox error={start.error ?? saveConfig.error ?? removeConfig.error} />}
       </Card>
     </div>
   );

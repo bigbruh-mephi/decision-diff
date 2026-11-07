@@ -111,6 +111,7 @@ def test_whatif_prepare_evaluate_metrics(run, tmp_path, monkeypatch):
     assert m["fidelity"] == 0.875
     assert m["approval_rate"] == {"before": 1.0, "after": 0.1875, "whatif": 1.0} and m["moved"] == 13
     assert whatif.metrics(rep, res, {"apps": ["A00", "A13"]})["moved"] == 1
+    assert len(m["moved_ids"]) == 13 and len(whatif.metrics(rep, res, {}, max_ids=2)["moved_ids"]) == 2
     for bad in ({"shift": 5}, {"shift": "x"}, {"nope": 1}):
         with pytest.raises(ValueError):
             whatif.evaluate(WHATIF, "t", meta, bad)
@@ -138,3 +139,17 @@ def test_new_checks_validate_on_the_open_run(tmp_path):
         chk = procedures.load_file(f, "check")
         assert procedures.validate_check_rows(chk["id"], chk["entrypoint"](m, pipeline._with_lineage(con, chk["params"])))
     con.close()
+
+
+def test_pivot_totals_are_distinct_apps(run):
+    path, params = run
+    rep = RunReport(path, params)
+    res = rep.pivot(["PATH"], ["SOURCE"], {"DIFF_FLAG": ["1"]}, {})
+    rows = {r[0]: r[1] for r in res["row_totals"]}
+    cols = {c[0]: c[1] for c in res["col_totals"]}
+    cells = {(c[0], c[1]): c[2] for c in res["cells"]}
+    assert rows["out.decision"] == cells[("out.decision", "BEFORE")] == cells[("out.decision", "AFTER")] == 13
+    assert rows["logic.extra"] == cells[("logic.extra", "AFTER")] == 1
+    assert cols["BEFORE"] == 13 < sum(v for (_, src), v in cells.items() if src == "BEFORE")
+    assert res["total"] == len(rep.changed) == 13
+    rep.con.close()

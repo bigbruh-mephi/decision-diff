@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CodeView } from "../../components/CodeView";
 import { Badge, Button, Card, CardHeader, ErrorBox, Mono, Skeleton } from "../../components/ui";
 import { api, type Journal } from "../../lib/api";
-import { dt, ms, n } from "../../lib/format";
+import { CHUNK_STATE, dt, ms, n, plural } from "../../lib/format";
 
 const STAGE: Record<string, string> = {
   parse: "Разбор ответов (формат → дерево)",
@@ -12,7 +12,12 @@ const STAGE: Record<string, string> = {
   segments: "Слой разрезов",
   write: "Запись порции (Parquet)",
   finalize: "Сборка витрины, фактов counts и битмапов",
+  checks: "Автопроверки",
+  lineage: "Линия принятия решения (роли атрибутов для кластеров)",
+  ai: "AI второе мнение",
 };
+
+const stageTitle = (s: string) => STAGE[s] ?? (s.startsWith("check:") ? `Автопроверка ${s.slice(6)}` : s);
 
 function CodeModal({ sha, onClose }: { sha: string; onClose: () => void }) {
   const code = useQuery({ queryKey: ["code", sha], queryFn: () => api.get<{ sha: string; kind: string; name: string; code: string; created_at: string }>(`/api/code/${sha}`) });
@@ -33,7 +38,16 @@ function CodeModal({ sha, onClose }: { sha: string; onClose: () => void }) {
 }
 
 export function JournalView({ runId, live }: { runId: string; live: unknown[] }) {
-  const j = useQuery({ queryKey: ["journal", runId, live.length], queryFn: () => api.get<Journal>(`/api/runs/${runId}/journal`), placeholderData: (p) => p });
+  const [tick, setTick] = useState(live.length);
+  const latest = useRef(live.length);
+  latest.current = live.length;
+  const pending = tick !== live.length;
+  useEffect(() => {
+    if (!pending) return;
+    const t = setTimeout(() => setTick(latest.current), 1000);
+    return () => clearTimeout(t);
+  }, [pending]);
+  const j = useQuery({ queryKey: ["journal", runId, tick], queryFn: () => api.get<Journal>(`/api/runs/${runId}/journal`), placeholderData: (p) => p });
   const [sha, setSha] = useState<string | null>(null);
   if (j.isLoading) return <Skeleton rows={8} />;
   if (j.error || !j.data) return <ErrorBox error={j.error} />;
@@ -64,7 +78,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                 return (
                   <tr key={s.stage + s.code_sha} className="border-b border-line last:border-0">
                     <td className="px-4 py-2">
-                      <div className="font-medium">{STAGE[s.stage] ?? s.stage}</div>
+                      <div className="font-medium">{stageTitle(s.stage)}</div>
                       <Mono className="text-muted">{s.stage}</Mono>
                       {s.error && <div className="text-xs text-fail">{s.error}</div>}
                     </td>
@@ -97,8 +111,8 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                 {chunks.map((c) => (
                   <tr key={c.chunk_no} className="border-b border-line">
                     <td className="num px-4 py-1">#{c.chunk_no}</td>
-                    <td className="px-2 py-1"><Badge tone={c.state === "done" ? "pass" : c.state === "failed" ? "fail" : "accent"}>{c.state}</Badge></td>
-                    <td className="num px-2 py-1">{n(c.apps)} заявок</td>
+                    <td className="px-2 py-1"><Badge tone={c.state === "done" ? "pass" : c.state === "failed" ? "fail" : "accent"}>{CHUNK_STATE[c.state] ?? c.state}</Badge></td>
+                    <td className="num px-2 py-1">{plural(c.apps, "заявка", "заявки", "заявок")}</td>
                     <td className="num px-2 py-1">{c.attempts > 1 ? <Badge tone="warn">попыток {c.attempts}</Badge> : `попыток ${c.attempts}`}</td>
                     <td className="px-2 py-1 text-muted">{c.worker}</td>
                     <td className="num px-4 py-1 text-right text-muted">{c.started_at && c.finished_at ? ms(new Date(c.finished_at).getTime() - new Date(c.started_at).getTime()) : "…"}</td>
