@@ -29,7 +29,7 @@ def evaluate(data, params):
 
 PROCEDURE = {
     "id": "spr_whatif_cutoff_rules",
-    "label": "SPR: cut-offs, stop-factors and target model what-if",
+    "label": "СПР: что если поменять пороги, стоп-факторы и целевую модель",
     "kind": "whatif",
     "unit_depth": 1,
     "inputs": {
@@ -41,13 +41,13 @@ PROCEDURE = {
     },
     "outcome": {"field": "DECISION", "values": ["APPROVE", "REJECT"]},
     "params": {
-        "slice": {"type": "enum", "values": ["AFTER", "BEFORE"], "default": "AFTER", "label": "Data and logic of"},
+        "slice": {"type": "enum", "values": ["AFTER", "BEFORE"], "default": "AFTER", "label": "Данные и логика среза"},
         "cutoff_shift": {"type": "float", "min": -0.3, "max": 0.3, "step": 0.01, "default": 0.0,
-                         "label": "Shift of every cut-off"},
+                         "label": "Сдвиг всех порогов"},
         "cutoffs": {"type": "float_map", "keys_from": "cut_name", "min": 0.0, "max": 1.0, "step": 0.01,
-                    "default": {}, "label": "Cut-off value by name (empty = as in the slice)"},
-        "rules_off": {"type": "multi", "values_from": "hit", "default": [], "label": "Disabled stop-factors"},
-        "target_model": {"type": "enum", "values_from": "models", "default": "", "label": "Target score model"},
+                    "default": {}, "label": "Значение порога по имени (пусто — как в срезе)"},
+        "rules_off": {"type": "multi", "values_from": "hit", "default": [], "label": "Отключённые стоп-факторы"},
+        "target_model": {"type": "enum", "values_from": "models", "default": "", "label": "Целевая модель скоринга"},
     },
     "entrypoint": evaluate,
 }

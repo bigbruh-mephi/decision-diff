@@ -52,14 +52,14 @@ def run(mart, params=None):
     for k, (sig, apps) in enumerate(found):
         if k == p["top_n"]:
             apps = [a for _, aa in found[k:] for a in aa]
-            name = f"other ({len(found) - k} clusters)"
+            name = f"прочее (кластеров: {len(found) - k})"
         elif not sig:
-            name = "outcome only (no upstream change)"
+            name = "только результат (выше по цепочке без изменений)"
         else:
             keys = sorted(f"{path.rsplit('.', 1)[-1]}{GLYPH.get(ct, '')}" for path, ct in sig)
             name = ", ".join(keys[:4]) + (f" (+{len(keys) - 4})" if len(keys) > 4 else "")
         fl = flipped.intersection(apps)
-        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": f"{name}; decision flips {len(fl)}",
+        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": f"{name}; смен решения {len(fl)}",
                      "CNT": len(apps), "TOTAL": total, "METRIC": round(len(fl) / len(apps), 4),
                      "APP_IDS": sorted(apps)[:p["app_ids_limit"]], "RESULT": "FAIL" if fl else "PASS",
                      "CONFIDENCE": "LOW" if len(apps) < p["low_confidence_cnt"] else "HIGH"})

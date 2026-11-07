@@ -45,8 +45,8 @@ def run(mart, params=None):
         significant = hi < 0 or (lo > 0 and p["direction"] == "both")
         swapped = sorted(g["in"] + g["out"])
         rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER",
-                     "ARGUMENT": f"{f}={v}: AR {g['b'] / n:.3f} -> {g['a'] / n:.3f}, 95% CI [{lo:+.3f}; {hi:+.3f}]"
-                     if f != "ALL" else f"ALL: AR {g['b'] / n:.3f} -> {g['a'] / n:.3f}, 95% CI [{lo:+.3f}; {hi:+.3f}]",
+                     "ARGUMENT": f"{f}={v}: доля {g['b'] / n:.3f} -> {g['a'] / n:.3f}, 95% ДИ [{lo:+.3f}; {hi:+.3f}]"
+                     if f != "ALL" else f"Все заявки: доля {g['b'] / n:.3f} -> {g['a'] / n:.3f}, 95% ДИ [{lo:+.3f}; {hi:+.3f}]",
                      "CNT": len(swapped), "TOTAL": n, "METRIC": round(delta, 4),
                      "APP_IDS": swapped[:p["app_ids_limit"]],
                      "RESULT": "FAIL" if significant and abs(delta) >= p["min_effect"] else "PASS",
@@ -54,5 +54,5 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "approval_rate_ci", "label": "Approval Rate по сегментам: значимое изменение", "params": DEFAULTS,
+CHECK = {"id": "approval_rate_ci", "label": "Доля одобрений по сегментам: значимое изменение", "params": DEFAULTS,
          "entrypoint": run}

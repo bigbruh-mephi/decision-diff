@@ -65,13 +65,13 @@ def run(mart, params=None):
         crit_psi = _chi2_95(max(nb - 1, 1)) * (1 / n + 1 / m)
         d = ks(before, after)
         crit_ks = 1.358 * math.sqrt((n + m) / (n * m))
-        band = "stable" if value < 0.1 else "moderate" if value < 0.25 else "major"
+        band = "стабильно" if value < 0.1 else "умеренно" if value < 0.25 else "сильно"
         common = {"LABEL": CHECK["label"], "SOURCE": "AFTER", "CNT": len(changed), "TOTAL": n,
                   "APP_IDS": sorted(changed)[:p["app_ids_limit"]],
                   "CONFIDENCE": "LOW" if len(changed) < p["low_confidence_cnt"] else "HIGH"}
-        rows.append({**common, "ARGUMENT": f"{path} PSI ({band}, crit {crit_psi:.4f})", "METRIC": round(value, 4),
+        rows.append({**common, "ARGUMENT": f"{path} PSI ({band}, порог {crit_psi:.4f})", "METRIC": round(value, 4),
                      "RESULT": "FAIL" if value >= p["fail_psi"] and value > crit_psi else "PASS"})
-        rows.append({**common, "ARGUMENT": f"{path} KS (crit {crit_ks:.4f})", "METRIC": round(d, 4),
+        rows.append({**common, "ARGUMENT": f"{path} KS (порог {crit_ks:.4f})", "METRIC": round(d, 4),
                      "RESULT": "FAIL" if d >= p["fail_ks"] and d > crit_ks else "PASS"})
     return rows
 

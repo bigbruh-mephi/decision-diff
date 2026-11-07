@@ -7,7 +7,7 @@ Example to treat them as equal: {"pattern": "**.rules.hit", "values": [["NULL", 
 
 PROCEDURE = {
     "id": "spr_compare",
-    "label": "SPR responses: value equivalences",
+    "label": "Ответы СПР: эквивалентные значения",
     "kind": "compare",
     "params": {"equivalent": []},
 }

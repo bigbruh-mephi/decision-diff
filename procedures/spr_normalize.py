@@ -6,7 +6,7 @@ index. Patterns: `*` one segment, `**` any number of segments.
 
 PROCEDURE = {
     "id": "spr_normalize",
-    "label": "SPR responses: array keys, technical exclusions, buckets",
+    "label": "Ответы СПР: ключи массивов, технические исключения, бакеты",
     "kind": "normalize",
     "params": {
         "arrays": {

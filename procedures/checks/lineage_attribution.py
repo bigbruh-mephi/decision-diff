@@ -12,6 +12,7 @@ import bisect
 import re
 from collections import Counter
 
+ROLE = {"logic": "логика", "outcome": "результат", "reference": "справочник"}
 DEFAULTS = {"stages": "@lineage", "decision_path": "@lineage", "max_levels": 50, "donors": 25,
             "low_confidence_cnt": 5, "app_ids_limit": 20}
 
@@ -90,7 +91,7 @@ def run(mart, params=None):
     def stage_of(path):
         if path not in cache:
             cache[path] = next(((i, n, r) for i, n, r, gs in compiled if any(g.match(path) for g in gs)),
-                               (len(compiled), "other", "logic"))
+                               (len(compiled), "прочее", "logic"))
         return cache[path]
 
     changed = {}
@@ -103,17 +104,17 @@ def run(mart, params=None):
         if first[2] == "input":
             input_led[app] = rs
         else:
-            groups.setdefault((first[0], f"{first[1]} ({first[2]})", first[2]), set()).add(app)
+            groups.setdefault((first[0], f"{first[1]} ({ROLE.get(first[2], first[2])})", first[2]), set()).add(app)
     explained, mixed = _donor_test(mart, input_led, stage_of, p)
     if explained:
-        groups[(-2, "input: explained by input under BEFORE logic", "input")] = explained
+        groups[(-2, "вход: объясняется входными данными при логике BEFORE", "input")] = explained
     if mixed:
-        groups[(-1, "input + logic change not explained by input", "mixed")] = mixed
+        groups[(-1, "вход и логика: изменение логики не объясняется входом", "mixed")] = mixed
     rows = []
     for (_, label, role), apps in sorted(groups.items()):
         fl = apps & flipped
         fail = role == "outcome" or role == "mixed" or (role == "input" and fl)
-        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": f"{label}; decision flips {len(fl)}",
+        rows.append({"LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": f"{label}; смен решения {len(fl)}",
                      "CNT": len(apps), "TOTAL": len(changed), "METRIC": round(len(fl) / len(apps), 4),
                      "APP_IDS": (sorted(fl) + sorted(apps - fl))[:p["app_ids_limit"]],
                      "RESULT": "FAIL" if fail else "PASS",
