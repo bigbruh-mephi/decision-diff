@@ -70,7 +70,7 @@ function ClusterTable({ clusters, total, onOpen, onTransition }: { clusters: Clu
               <td className="px-4 py-2">
                 {c.cid ? (
                   <button onClick={() => onOpen(c.cid!)} className="font-medium text-accent hover:underline">
-                    №{c.cid} · {c.paths?.length} атрибутов
+                    №{c.cid} · {tail(c.transitions?.[0]?.path ?? c.paths?.[0] ?? "")}{(c.paths?.length ?? 0) > 1 ? ` и ещё ${c.paths!.length - 1}` : ""}
                   </button>
                 ) : (
                   <span className="text-muted">ещё {c.clusters} кластеров</span>
