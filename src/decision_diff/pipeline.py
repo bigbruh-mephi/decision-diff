@@ -74,13 +74,12 @@ def _chunk_body(input_uri, out_dir, snaps):
     return stats, stages
 
 
-def run_finalize(chunk_dirs, run_file, snaps):
-    """Build the run file and execute the configured checks; returns ``(stats, check_results, stages)``."""
-    seg = _proc(snaps["segments"])
+def build_run(chunk_dirs, run_file, snaps):
+    """Build the run file (trusted code, no user procedure runs here); returns ``(stats, stages)``."""
+    seg = procedures.load(snaps["segments"]["code"], snaps["segments"]["name"], "segments")
     t0 = time.time()
-    stats = finalize.build(chunk_dirs, run_file, seg["params"])
-    stages = [_stage("finalize", None, t0, time.time(), len(chunk_dirs), stats["mart_rows"])]
-    return stats, run_checks(run_file, snaps.get("checks", [])), stages
+    stats = finalize.build(chunk_dirs, run_file, {**seg["params"], **(snaps["segments"].get("params") or {})})
+    return stats, [_stage("finalize", None, t0, time.time(), len(chunk_dirs), stats["mart_rows"])]
 
 
 def run_checks(run_file, check_snaps):

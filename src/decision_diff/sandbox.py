@@ -142,6 +142,8 @@ def run(target, args=(), read=(), write=(), wall_s=300, mem_mb=2048, result_mb=6
     """
     if require and not (landlock_abi() and LIBSECCOMP):
         raise SandboxError("Landlock or libseccomp is not available; refusing to run user code")
+    if threads() > 1:
+        raise SandboxError("sandbox launcher process is multi-threaded; fork could deadlock the child")
     r, w = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -192,6 +194,12 @@ def run(target, args=(), read=(), write=(), wall_s=300, mem_mb=2048, result_mb=6
     if not out["ok"]:
         raise SandboxError(out["error"] + ("\n" + out["traceback"] if out.get("traceback") else ""))
     return out["result"]
+
+
+def threads():
+    """Number of OS threads of this process (native threads included)."""
+    with open("/proc/self/status") as f:
+        return next(int(line.split()[1]) for line in f if line.startswith("Threads:"))
 
 
 def _kill(pid):

@@ -30,10 +30,15 @@ class Worker:
     def __init__(self, pool, ch, procs):
         self.pool, self.ch = pool, ch
         self.ex = ProcessPoolExecutor(procs)
+        self.trusted = ProcessPoolExecutor(2)
         self.name = f"{socket.gethostname()}:{os.getpid()}"
 
     async def cpu(self, fn, *args):
+        """Sandbox launchers: these pool processes never run DuckDB themselves and stay single-threaded."""
         return await asyncio.get_running_loop().run_in_executor(self.ex, fn, *args)
+
+    async def cpu_trusted(self, fn, *args):
+        return await asyncio.get_running_loop().run_in_executor(self.trusted, fn, *args)
 
     async def publish_all(self, tasks):
         for t in tasks:
@@ -57,7 +62,7 @@ class Worker:
             if not done:
                 await db.event(c, run_id, "ingest.started", {"source": t["source"], "resumed": bool(have)})
         try:
-            items = await self.cpu(pipeline.list_pairs, t["source"])
+            items = await self.cpu_trusted(pipeline.list_pairs, t["source"])
         except DETERMINISTIC as e:
             async with self.pool.connection() as c:
                 await c.execute("UPDATE runs SET state = 'failed', error = %s, finished_at = now() WHERE id = %s",
@@ -70,7 +75,7 @@ class Worker:
             if n in have:
                 continue
             uri = str(in_dir / f"chunk-{n:06d}.zip")
-            apps = await self.cpu(pipeline.cut_chunk, items[k:k + size], uri)
+            apps = await self.cpu_trusted(pipeline.cut_chunk, items[k:k + size], uri)
             async with self.pool.connection() as c:
                 await db.add_chunks(c, run_id, [(n, uri, apps)])
             await self.dispatch(run_id)
@@ -127,8 +132,9 @@ class Worker:
                 try:
                     if not dirs:
                         raise ValueError("no chunk finished successfully")
-                    stats, checks, stages = await self.cpu(pipeline.run_finalize, dirs, str(run_file),
-                                                           await self.snapshots(run["procedures"]))
+                    snaps = await self.snapshots(run["procedures"])
+                    stats, stages = await self.cpu_trusted(pipeline.build_run, dirs, str(run_file), snaps)
+                    checks = await self.cpu(pipeline.run_checks, str(run_file), snaps["checks"])
                 except Exception as e:
                     await c.execute("UPDATE runs SET state = 'failed', error = %s, finished_at = now() WHERE id = %s",
                                     (f"finalize: {type(e).__name__}: {e}", run_id))
@@ -232,6 +238,7 @@ async def main(queues, procs):
     sweeper.cancel()
     await consume.close()
     w.ex.shutdown(wait=True, cancel_futures=True)
+    w.trusted.shutdown(wait=True, cancel_futures=True)
     await conn.close()
     await p.close()
 
