@@ -73,3 +73,36 @@ def validate_check_rows(check_id, rows):
             raise ProcedureError(f"{check_id}: row {i} SOURCE must be BEFORE or AFTER")
         out.append({**{f: r[f] for f in CHECK_FIELDS}, "APP_IDS": [str(a) for a in r["APP_IDS"] or []]})
     return out
+
+
+def inspect_source(code, name="<workspace>"):
+    """Contract metadata from source WITHOUT executing it (for the API and file discovery).
+
+    Reads the literal ``id``/``label``/``kind`` of the ``PROCEDURE`` or ``CHECK`` assignment; raises
+    :class:`ProcedureError` on syntax errors or a missing contract. Execution happens only in the sandbox.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(code, name)
+    except SyntaxError as e:
+        raise ProcedureError(f"{name}:{e.lineno}: {e.msg}") from e
+    found = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                and node.targets[0].id in ("PROCEDURE", "CHECK") and isinstance(node.value, ast.Dict):
+            meta = {}
+            for k, v in zip(node.value.keys, node.value.values):
+                if isinstance(k, ast.Constant) and k.value in ("id", "label", "kind") and isinstance(v, ast.Constant):
+                    meta[k.value] = v.value
+            found[node.targets[0].id] = meta
+    meta = found.get("PROCEDURE") or found.get("CHECK")
+    if meta is None:
+        raise ProcedureError(f"{name}: module must assign a literal PROCEDURE or CHECK dict")
+    kind = meta.get("kind") or ("check" if "CHECK" in found else None)
+    if kind not in KINDS:
+        raise ProcedureError(f"{name}: kind must be one of {KINDS}")
+    if not meta.get("id") or not meta.get("label"):
+        raise ProcedureError(f"{name}: id and label must be string literals")
+    return {"kind": kind, "id": meta["id"], "label": meta["label"],
+            "sha": hashlib.sha256(code.encode()).hexdigest()[:16]}

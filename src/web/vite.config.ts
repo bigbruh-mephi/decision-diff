@@ -1,0 +1,9 @@
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  build: { outDir: "../decision_diff/web", emptyOutDir: true, chunkSizeWarningLimit: 1500 },
+  server: { proxy: { "/api": "http://localhost:8765", "/s/": "http://localhost:8765" } },
+});

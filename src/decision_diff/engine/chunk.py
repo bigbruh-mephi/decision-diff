@@ -50,10 +50,11 @@ def process_apps(apps, normalize, compare_proc, segments_proc, P=None):
     eq = P.equivalent if (compare_proc or {}).get("params", {}).get("equivalent") else None
     seg_fn, seg_params = segments_proc["entrypoint"], segments_proc.get("params", {})
     cols = {c: [] for c in MART_COLS}
+    c_app, c_src, c_jp, c_ak, c_val, c_typ, c_adj, c_df, c_ct, c_tch = (cols[c].append for c in MART_COLS)
     seg_rows, issue_rows = [], []
     t = {"flatten": 0.0, "compare": 0.0, "segments": 0.0}
     changed_apps = n_apps = 0
-    breaks_memo = {}
+    breaks_memo, adj_memo, jp_memo = {}, {}, {}
     for app_id, before, after in apps:
         n_apps += 1
         A = Trie()
@@ -65,26 +66,31 @@ def process_apps(apps, normalize, compare_proc, segments_proc, P=None):
         app_changed = False
         for key, (ct, tch) in res.items():
             node, ak = key
-            br = breaks_memo.get(node, 0)
-            if br == 0:
-                br = breaks_memo[node] = P.breaks(node)
+            jp = jp_memo.get(node)
+            if jp is None:
+                jp = jp_memo[node] = P.info(node)[0]
+                breaks_memo[node] = P.breaks(node)
             df = int(ct != SAME)
             app_changed |= bool(df)
-            jp, akey = P.info(node)[0], A.akey(ak)
+            akey = A.akey(ak)
             for side, data in (("BEFORE", fb), ("AFTER", fa)):
                 v = data.get(key)
                 if v is None:
                     continue
-                cols["APP_ID"].append(app_id)
-                cols["SOURCE"].append(side)
-                cols["JSONPATH"].append(jp)
-                cols["ARRAY_KEY"].append(akey)
-                cols["VALUE"].append(v[1])
-                cols["TYPE"].append(v[0])
-                cols["ADJUSTED_VALUE"].append(bucket_label(br, v[1]) if br else v[1])
-                cols["DIFF_FLAG"].append(df)
-                cols["CHANGE_TYPE"].append(ct)
-                cols["TYPE_CHANGED"].append(tch)
+                adj = adj_memo.get((node, v[1]))
+                if adj is None:
+                    br = breaks_memo[node]
+                    adj = adj_memo[node, v[1]] = bucket_label(br, v[1]) if br else v[1]
+                c_app(app_id)
+                c_src(side)
+                c_jp(jp)
+                c_ak(akey)
+                c_val(v[1])
+                c_typ(v[0])
+                c_adj(adj)
+                c_df(df)
+                c_ct(ct)
+                c_tch(tch)
         changed_apps += app_changed
         t2 = time.perf_counter()
         seg = seg_fn(before or {}, after or {}, seg_params) if (before or after) else {}

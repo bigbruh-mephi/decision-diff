@@ -17,7 +17,8 @@ def _as_list(v):
 def open_run(path, threads=4, memory_limit="1GB"):
     """Read-only DuckDB connection to a run file with external access disabled."""
     return duckdb.connect(str(path), read_only=True,
-                          config={"threads": threads, "memory_limit": memory_limit, "enable_external_access": False})
+                          config={"threads": threads, "memory_limit": memory_limit, "enable_external_access": False,
+                                  "autoinstall_known_extensions": False, "autoload_known_extensions": False})
 
 
 class Mart:
