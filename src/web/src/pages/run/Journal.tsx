@@ -89,7 +89,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                     <td className="num px-2 py-2 text-right">{ms(s.cpu_ms)}</td>
                     <td className="px-2 py-2">
                       <div className="relative h-2 rounded-full bg-surface-2">
-                        <div className="absolute h-full rounded-full bg-accent" style={{ left: `${((a - t0) / span) * 100}%`, width: `${Math.max(1, ((b - a) / span) * 100)}%` }} />
+                        <div className="absolute h-full rounded-full bg-muted/60" style={{ left: `${((a - t0) / span) * 100}%`, width: `${Math.max(1, ((b - a) / span) * 100)}%` }} />
                       </div>
                     </td>
                     <td className="px-4 py-2">
@@ -127,11 +127,11 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
         </Card>
         <Card>
           <CardHeader title="События прогона" />
-          <ul className="max-h-80 overflow-y-auto font-mono text-[11.5px]">
+          <ul className="max-h-80 overflow-y-auto font-mono text-xs">
             {events.map((e) => (
               <li key={e.id} className="flex gap-2 border-b border-line px-4 py-1">
                 <span className="shrink-0 whitespace-nowrap text-muted">{dt(e.ts)}</span>
-                <span className="shrink-0 text-accent" title={e.type}>{EVENT[e.type] ?? e.type}</span>
+                <span className="shrink-0 text-muted" title={e.type}>{EVENT[e.type] ?? e.type}</span>
                 <span className="truncate text-muted" title={eventText(e.type, e.data)}>{eventText(e.type, e.data)}</span>
               </li>
             ))}

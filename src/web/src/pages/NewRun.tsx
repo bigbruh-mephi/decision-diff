@@ -64,7 +64,7 @@ function ParamsEditor({ id, name, value, onChange, onValid }: { id: string; name
       {proc.data && (
         <div className="flex flex-col gap-1 py-2">
           <textarea
-            className={inputCls + " h-auto min-h-24 py-1.5 font-mono text-[12px]"}
+            className={inputCls + " h-auto min-h-24 py-1.5 font-mono text-xs"}
             rows={Math.min(14, JSON.stringify({ ...declared, ...value }, null, 2).split("\n").length)}
             spellCheck={false}
             value={text ?? JSON.stringify({ ...declared, ...value }, null, 2)}
@@ -72,9 +72,9 @@ function ParamsEditor({ id, name, value, onChange, onValid }: { id: string; name
             aria-label={`Параметры: ${name}`}
           />
           {error ? (
-            <span className="text-[11px] text-fail">{error}</span>
+            <span className="text-xs text-fail">{error}</span>
           ) : (
-            <span className="text-[11px] text-muted">
+            <span className="text-xs text-muted">
               Действующие значения: объявленные в коде процедуры, поверх них ваши изменения. Сохраняются в конфигурации и прогоне.
               {changed.length > 0 && <button className="ml-2 text-accent hover:underline" onClick={() => { setText(null); onChange(undefined); }}>сбросить</button>}
             </span>
@@ -207,7 +207,7 @@ export function NewRunPage() {
       )}
       <Card>
         <CardHeader title="1. Датасет" hint="Результат модулей 1–2: два среза ответов СПР по одним и тем же заявкам" />
-        <div className="grid gap-3 p-4 sm:grid-cols-[1fr_auto]">
+        <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-[1fr_auto]">
           <Field label="Прогон модуля 2">
             <select className={inputCls} value={dataset} onChange={(e) => setDataset(e.target.value)}>
               {(datasets.data ?? []).map((d) => (
@@ -249,7 +249,7 @@ export function NewRunPage() {
       {sel && (
         <Card>
           <CardHeader title="2. Процедуры" hint="📄 файл, размещённый в системе · ✎ код из рабочей области. Обработчик меняется без изменения кода приложения." />
-          <div className="grid gap-3 p-4">
+          <div className="grid grid-cols-1 gap-3 p-4">
             {STAGES.map((st) => (
               <Field key={st.kind} label={st.title} hint={st.hint}>
                 <ProcSelect items={byKind[st.kind] ?? []} value={sel[st.kind]} onChange={(v) => setSel({ ...sel, [st.kind]: v })} />
@@ -273,7 +273,7 @@ export function NewRunPage() {
               </Link>
             }
           />
-          <div className="grid gap-1 p-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
             {(byKind.check ?? []).map((p) => (
               <label key={p.id} className="flex min-w-0 items-center gap-2 rounded px-2 py-1 hover:bg-surface-2">
                 <input
@@ -291,7 +291,7 @@ export function NewRunPage() {
       {sel && (
         <Card>
           <CardHeader title="4. Параметры процедур" hint="JSON поверх параметров, объявленных в коде; раскройте процедуру, чтобы изменить" />
-          <div className="grid gap-1.5 p-4">
+          <div className="grid grid-cols-1 gap-1.5 p-4">
             {chosen.map((id) => {
               const p = procs.data?.find((x) => x.id === id);
               return p ? (

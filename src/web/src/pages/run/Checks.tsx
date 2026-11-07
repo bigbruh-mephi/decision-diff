@@ -1,14 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Badge, Card, CardHeader, Empty, ErrorBox, Mono, Skeleton, cx } from "../../components/ui";
+import { Badge, Card, CardHeader, Empty, ErrorBox, Filter, Mono, Skeleton, cx, linkCls } from "../../components/ui";
 import { api, type CheckResult, type CheckRow } from "../../lib/api";
 import { ms, n, plural } from "../../lib/format";
 import { useScopeNav } from "../Run";
 
 function verdict(r: CheckRow) {
   if (r.RESULT === "PASS") return { tone: "pass" as const, label: "PASS", row: "" };
-  if (r.CONFIDENCE === "LOW") return { tone: "low" as const, label: "FAIL · низкая уверенность", row: "bg-fail-low-bg/60 text-fail-low" };
-  return { tone: "fail" as const, label: "FAIL", row: "bg-fail-bg/50" };
+  if (r.CONFIDENCE === "LOW") return { tone: "low" as const, label: "FAIL · низкая уверенность", row: "text-fail-low" };
+  return { tone: "fail" as const, label: "FAIL", row: "" };
 }
 
 export function ChecksView({ runId }: { runId: string }) {
@@ -33,13 +33,7 @@ export function ChecksView({ runId }: { runId: string }) {
           title={`Отчёт автопроверок · ${plural(rows.length, "строка", "строки", "строк")} из ${plural((checks.data ?? []).length, "проверки", "проверок", "проверок")}`}
           hint="Строки всех проверок в одной таблице. Бледные строки — мало срабатываний, уверенности в поломке нет"
           actions={
-            <div className="flex gap-1">
-              {(["all", "fail", "pass"] as const).map((f) => (
-                <button key={f} onClick={() => setFilter(f)} className={cx("rounded px-2 py-1 text-xs", filter === f ? "bg-accent text-on-accent" : "text-muted hover:bg-surface-2")}>
-                  {f === "all" ? "все" : f === "fail" ? "FAIL" : "PASS"}
-                </button>
-              ))}
-            </div>
+            <Filter value={filter} onChange={setFilter} items={[{ id: "all", label: "все" }, { id: "fail", label: "FAIL" }, { id: "pass", label: "PASS" }]} />
           }
         />
         {!rows.length ? (
@@ -63,10 +57,7 @@ export function ChecksView({ runId }: { runId: string }) {
                   const v = verdict(r);
                   return (
                     <tr key={i} className={cx("border-b border-line last:border-0", v.row)}>
-                      <td className="px-4 py-1.5">
-                        {r.LABEL}
-                        <div className="text-[11px] text-muted">{ms(r.check.duration_ms)} · код {r.check.check_sha.slice(0, 7)}</div>
-                      </td>
+                      <td className="px-4 py-1.5" title={`${ms(r.check.duration_ms)} · код ${r.check.check_sha.slice(0, 7)}`}>{r.LABEL}</td>
                       <td className="px-2 py-1.5 text-xs">{r.SOURCE === "AFTER" ? "AFTER (BETA)" : "BEFORE (MASTER)"}</td>
                       <td className="max-w-80 truncate px-2 py-1.5" title={r.ARGUMENT}><Mono>{r.ARGUMENT || "—"}</Mono></td>
                       <td className="num px-2 py-1.5 text-right">{n(r.CNT)} / {n(r.TOTAL)}</td>
@@ -74,7 +65,7 @@ export function ChecksView({ runId }: { runId: string }) {
                       <td className="px-2 py-1.5"><Badge tone={v.tone}>{v.label}</Badge></td>
                       <td className="num px-4 py-1.5 text-right">
                         {r.APP_IDS.length ? (
-                          <button className="text-accent hover:underline" onClick={() => go(r.CNT > r.APP_IDS.length ? { check: { sha: r.check.check_sha, row: r.row, cnt: r.CNT } } : { apps: r.APP_IDS }, "apps")}>
+                          <button className={linkCls} onClick={() => go(r.CNT > r.APP_IDS.length ? { check: { sha: r.check.check_sha, row: r.row, cnt: r.CNT } } : { apps: r.APP_IDS }, "apps")}>
                             {n(Math.max(r.CNT, r.APP_IDS.length))} шт.
                           </button>
                         ) : (

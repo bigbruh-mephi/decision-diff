@@ -53,7 +53,7 @@ function Output({ res }: { res: CellResult }) {
       {r.error && <ErrorBox inline error={r.error} debug={r.error_debug} />}
       {r.value?.type === "table" && r.value.rows && (
         <div className="max-h-80 overflow-auto rounded border border-line">
-          <table className="w-full text-[11.5px]">
+          <table className="w-full text-xs">
             <thead className="sticky top-0 bg-surface-2">
               <tr>{Object.keys(r.value.rows[0] ?? {}).map((k) => <th key={k} className="px-2 py-1 text-left font-mono font-medium">{k}</th>)}</tr>
             </thead>
@@ -160,7 +160,7 @@ export function WorkspacePage() {
             <h1 className="text-[13px] font-semibold">{current ? current.name : "Новая процедура"}</h1>
             {current && <Badge>{current.origin === "file" ? `файл ${current.path}` : "рабочая область"}</Badge>}
             {current && <Mono className="text-muted">версия {current.sha.slice(0, 7)}</Mono>}
-            <div className="ml-auto flex flex-wrap items-center gap-2">
+            <div className="ml-auto flex max-w-full flex-wrap items-center gap-2">
               <select className={inputCls + " h-7 text-xs"} value={runId} onChange={(e) => setRunId(e.target.value)} aria-label="Прогон для запуска">
                 <option value="">без прогона</option>
                 {done.map((r) => (
@@ -182,7 +182,7 @@ export function WorkspacePage() {
           <div className="p-3">
             <CodeView value={code} onChange={setCode} />
           </div>
-          <p className="px-4 pb-3 text-[11px] text-muted">
+          <p className="px-4 pb-3 text-xs text-muted">
             Код исполняется только в песочнице воркера: без сети, без доступа к файлам кроме витрины прогона, с лимитами времени и памяти. Ячейки разделяются строкой <Mono># %%</Mono>; в ячейке доступен объект <Mono>mart</Mono> (MartAPI). В процедуру сохраняются ячейки до объявления <Mono>CHECK</Mono>/<Mono>PROCEDURE</Mono> включительно, ячейки ниже — черновик для проб.
           </p>
         </Card>
@@ -194,7 +194,7 @@ export function WorkspacePage() {
                 <div className="mb-1 flex items-center gap-2">
                   <Button size="sm" onClick={() => runCell(i)} disabled={!runId} aria-label={`Выполнить ячейку ${i + 1}`}>▶</Button>
                   <span className="text-xs font-medium">{c.title}</span>
-                  <span className="text-[11px] text-muted">строки {c.start + 1}–{c.end}</span>
+                  <span className="text-xs text-muted">строки {c.start + 1}–{c.end}</span>
                 </div>
                 {results[i] && <Output res={results[i]} />}
               </li>

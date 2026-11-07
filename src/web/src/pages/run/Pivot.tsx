@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useMemo, useState } from "react";
-import { Badge, Button, Card, CardHeader, ChangeGlyph, ErrorBox, Skeleton, cx } from "../../components/ui";
+import { Badge, Button, Card, CardHeader, ChangeGlyph, ErrorBox, Skeleton, cx, linkCls } from "../../components/ui";
 import { api, type Fields, type Pivot, type Scope } from "../../lib/api";
 import { n, plural } from "../../lib/format";
 import { useScopeNav } from "../Run";
@@ -26,7 +26,7 @@ const byKey = (a: string[], b: string[]) => {
 
 function Chip({ name, onDragStart, onRemove }: { name: string; onDragStart: () => void; onRemove?: () => void }) {
   return (
-    <span draggable onDragStart={onDragStart} className="inline-flex cursor-grab items-center gap-1 rounded border border-line-strong bg-surface px-1.5 py-0.5 font-mono text-[11.5px] active:cursor-grabbing">
+    <span draggable onDragStart={onDragStart} className="inline-flex cursor-grab items-center gap-1 rounded border border-line-strong bg-surface px-1.5 py-0.5 font-mono text-xs active:cursor-grabbing">
       {name}
       {onRemove && (
         <button onClick={onRemove} aria-label={`Убрать ${name}`} className="text-muted hover:text-fail">×</button>
@@ -142,13 +142,13 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
               className={cx("min-h-12 rounded-lg border border-dashed bg-surface p-2", drag ? "border-accent" : "border-line-strong")}
               aria-label={`Зона ${z.label}`}
             >
-              <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted">{z.label}</div>
+              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted">{z.label}</div>
               <div className="flex flex-wrap gap-1">
                 {z.items.map((f) => (
                   <span key={f} className="relative">
                     <Chip name={f} onDragStart={() => setDrag({ name: f, from: z.id })} onRemove={() => remove(z.id, f)} />
                     {z.id === "filters" && (
-                      <button className="ml-1 text-[11px] text-accent" onClick={() => setFilterOpen(filterOpen === f ? null : f)}>
+                      <button className="ml-1 text-xs text-accent" onClick={() => setFilterOpen(filterOpen === f ? null : f)}>
                         {layout.filters[f].length ? layout.filters[f].join(", ").slice(0, 24) : "все"} ▾
                       </button>
                     )}
@@ -185,18 +185,18 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
           {!table && !pivot.error && <Skeleton rows={8} />}
           {table && (
             <div className="max-h-[70vh] overflow-auto">
-              <table className="w-full border-collapse text-[12.5px]">
+              <table className="w-full border-collapse text-xs">
                 <thead className="sticky top-0 z-10 bg-surface">
                   <tr>
                     {table.rowDims.map((d) => (
-                      <th key={d} className="border-b border-line px-2 py-1.5 text-left font-mono text-[11px] font-medium text-muted">{d}</th>
+                      <th key={d} className="border-b border-line px-2 py-1.5 text-left font-mono text-xs font-medium text-muted">{d}</th>
                     ))}
                     {table.cols.map((c) => (
-                      <th key={c.join()} className={cx("border-b border-l border-line px-2 py-1.5 text-right text-[11px] font-medium", c.includes("1") && table.colDims.includes("DIFF_FLAG") && "bg-accent-bg")}>
+                      <th key={c.join()} className={cx("border-b border-l border-line px-2 py-1.5 text-right text-xs font-medium", c.includes("1") && table.colDims.includes("DIFF_FLAG") && "bg-accent-bg")}>
                         {c.length ? c.map((x, i) => <Fragment key={i}>{i > 0 && " · "}<Header k={x} /></Fragment>) : "заявок"}
                       </th>
                     ))}
-                    {table.rowTotal && <th className="border-b border-l border-line-strong px-2 py-1.5 text-right text-[11px] font-semibold" title="Различные заявки строки по всем колонкам">Итого</th>}
+                    {table.rowTotal && <th className="border-b border-l border-line-strong px-2 py-1.5 text-right text-xs font-semibold" title="Различные заявки строки по всем колонкам">Итого</th>}
                   </tr>
                 </thead>
                 <tbody className={cx(pivot.isFetching && "opacity-60 transition-opacity")}>
@@ -205,7 +205,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                       {r.map((v, i) => {
                         const same = ri > 0 && r.slice(0, i + 1).join("\u0000") === table.rows[ri - 1].slice(0, i + 1).join("\u0000");
                         return (
-                          <td key={i} className={cx("max-w-72 truncate border-b border-line px-2 py-1 font-mono text-[11.5px]", same && "text-transparent")} title={v}>
+                          <td key={i} className={cx("max-w-72 truncate border-b border-line px-2 py-1 font-mono text-xs", same && "text-transparent")} title={v}>
                             {v || <span className="text-muted">∅</span>}
                           </td>
                         );
@@ -215,7 +215,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                         return (
                           <td key={c.join()} className="num border-b border-l border-line px-2 py-1 text-right">
                             {v ? (
-                              <button onClick={() => openCell(r, c)} className="text-accent hover:underline">{n(v)}</button>
+                              <button onClick={() => openCell(r, c)} className={linkCls}>{n(v)}</button>
                             ) : (
                               <span className="text-line-strong">·</span>
                             )}
@@ -224,7 +224,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                       })}
                       {table.rowTotal && (
                         <td className="num border-b border-l border-line-strong px-2 py-1 text-right font-medium">
-                          <button onClick={() => openCell(r, [])} className="text-accent hover:underline">{n(table.rowTotal.get(r.join("\u0000")))}</button>
+                          <button onClick={() => openCell(r, [])} className={linkCls}>{n(table.rowTotal.get(r.join("\u0000")))}</button>
                         </td>
                       )}
                     </tr>
@@ -236,12 +236,12 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                       <td colSpan={table.rowDims.length} className="border-t border-line-strong px-2 py-1.5 text-xs font-semibold" title="Различные заявки колонки по всем строкам">Итого</td>
                       {table.cols.map((c) => (
                         <td key={c.join()} className="num border-l border-t border-line-strong px-2 py-1 text-right">
-                          <button onClick={() => openCell([], c)} className="text-accent hover:underline">{n(table.colTotal!.get(c.join("\u0000")))}</button>
+                          <button onClick={() => openCell([], c)} className={linkCls}>{n(table.colTotal!.get(c.join("\u0000")))}</button>
                         </td>
                       ))}
                       {table.rowTotal && (
                         <td className="num border-l border-t border-line-strong px-2 py-1 text-right font-semibold">
-                          <button onClick={() => openCell([], [])} className="text-accent hover:underline">{n(table.total)}</button>
+                          <button onClick={() => openCell([], [])} className={linkCls}>{n(table.total)}</button>
                         </td>
                       )}
                     </tr>

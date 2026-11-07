@@ -9,7 +9,7 @@
 :root {
   --bg: #f8f4f0;
   --surface: #ffffff;
-  --surface-2: #f8f4f0;
+  --surface-2: #f1ebe4;
   --fg: #0f0f0f;
   --muted: #6b6560;
   --line: #eee9e3;
@@ -28,14 +28,16 @@
   --warn: #8f6200;
   --warn-bg: #fbf3dc;
   --before: #6b6560;
-  --after: #d93a14;
+  --after: #0f0f0f;
   --ct-changed: #7a3fb5;
   --ct-new: #0d7f86;
   --ct-lost: #b57a00;
   --ct-same: #9a948e;
+  color-scheme: light;
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #151210;
   --surface: #1f1b18;
   --surface-2: #2a2521;
@@ -56,7 +58,7 @@
   --warn: #e6bd5c;
   --warn-bg: #352a12;
   --before: #a89f97;
-  --after: #ff8562;
+  --after: #f5f1ed;
   --ct-changed: #bf97e8;
   --ct-new: #5cc4ca;
   --ct-lost: #e6bd5c;
@@ -89,6 +91,11 @@
   --color-ct-new: var(--ct-new);
   --color-ct-lost: var(--ct-lost);
   --color-ct-same: var(--ct-same);
+  /* the root is 13px, so the default rem sizes come out unreadably small (text-xs = 9.75px) */
+  --text-xs: 12px;
+  --text-xs--line-height: 1.4;
+  --text-sm: 13px;
+  --text-sm--line-height: 1.45;
   --font-sans: "Manrope Variable", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Montserrat Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -104,6 +111,14 @@ body {
   font-size: 13px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Tailwind resets buttons to the arrow cursor; here everything that reacts to a click shows the hand */
+button:not(:disabled),
+summary,
+select,
+label:has(input[type="checkbox"]) {
+  cursor: pointer;
 }
 
 .num {

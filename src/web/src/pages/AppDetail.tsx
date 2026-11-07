@@ -47,13 +47,13 @@ export function AppDetailPage() {
         </h1>
         <p className="num text-xs text-muted">{plural(a.rows.length, "атрибут", "атрибута", "атрибутов")} · изменилось {n(changed)} · без изменений {n(same)}</p>
       </div>
-      <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Card>
           <CardHeader
             title="BEFORE / AFTER по атрибутам"
             hint="Горизонтальное представление только для просмотра; хранение витрины вертикальное"
             actions={
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <input className={inputCls + " h-7 w-56 text-xs"} placeholder="фильтр по пути или ключу" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Фильтр атрибутов" />
                 <label className="flex items-center gap-1 text-xs text-muted">
                   <input type="checkbox" checked={showSame} onChange={(e) => setShowSame(e.target.checked)} /> показать {n(same)} без изменений
@@ -62,7 +62,7 @@ export function AppDetailPage() {
             }
           />
           <div className="overflow-x-auto">
-            <table className="w-full text-[12.5px]">
+            <table className="w-full text-xs">
               <thead className="bg-surface text-left text-xs text-muted">
                 <tr className="border-b border-line">
                   <th className="w-8 px-2 py-2" />
@@ -75,7 +75,7 @@ export function AppDetailPage() {
               {groups.map(([g, rows]) => (
                 <tbody key={g}>
                   <tr>
-                    <th colSpan={5} className="bg-surface-2 px-3 py-1 text-left font-mono text-[11px] font-medium text-muted">{g}</th>
+                    <th colSpan={5} className="bg-surface-2 px-3 py-1 text-left font-mono text-xs font-medium text-muted">{g}</th>
                   </tr>
                   {rows.map((r) => {
                     const hit = path && r.PATH === path;
@@ -87,7 +87,7 @@ export function AppDetailPage() {
                           {r.input && <Badge tone="warn">вход</Badge>}
                           {r.TYPE_CHANGED && <Badge tone="warn">тип</Badge>}
                         </td>
-                        <td className="max-w-48 truncate px-2 py-1 font-mono text-[11.5px] text-muted" title={r.ARRAY_KEY}>{r.ARRAY_KEY || "—"}</td>
+                        <td className="max-w-48 truncate px-2 py-1 font-mono text-xs text-muted" title={r.ARRAY_KEY}>{r.ARRAY_KEY || "—"}</td>
                         <td className="max-w-72 break-all px-2 py-1 font-mono">{r.VALUE_BEFORE ?? <span className="text-muted">нет атрибута</span>}</td>
                         <td className={cx("max-w-72 break-all px-2 py-1 font-mono", r.CHANGE_TYPE !== "SAME" && "font-semibold")}>{r.VALUE_AFTER ?? <span className="font-normal text-muted">нет атрибута</span>}</td>
                       </tr>

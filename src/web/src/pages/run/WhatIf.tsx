@@ -63,7 +63,7 @@ function ParamInput({ name, p, value, choices, errors, onChange }: { name: strin
         {opts.map((o) => {
           const on = (value as string[] | undefined)?.includes(o);
           return (
-            <button key={o} onClick={() => onChange(on ? (value as string[]).filter((x) => x !== o) : [...((value as string[]) ?? []), o])} className={cx("rounded border px-1.5 py-0.5 font-mono text-[11.5px]", on ? "border-fail/50 bg-fail-bg text-fail line-through" : "border-line-strong hover:border-accent")} aria-pressed={on}>
+            <button key={o} onClick={() => onChange(on ? (value as string[]).filter((x) => x !== o) : [...((value as string[]) ?? []), o])} className={cx("rounded border px-1.5 py-0.5 font-mono text-xs", on ? "border-fail/50 bg-fail-bg text-fail line-through" : "border-line-strong hover:border-accent")} aria-pressed={on}>
               {o}
             </button>
           );
@@ -80,7 +80,7 @@ function ParamInput({ name, p, value, choices, errors, onChange }: { name: strin
           <label key={k} className="grid grid-cols-[1fr_9rem] items-center gap-x-2 text-xs">
             <span className="truncate font-mono" title={k}>{k}</span>
             <input type="number" min={p.min} max={p.max} step={p.step} placeholder="как в срезе" aria-invalid={!!bad} className={cx(inputCls, "h-7 px-2 text-xs", bad && "ring-2 ring-fail")} value={map[k] ?? ""} onChange={(e) => { const next = { ...map }; if (e.target.value === "") delete next[k]; else next[k] = Number(e.target.value); onChange(next); }} />
-            {bad && <span role="alert" className="col-span-2 text-[11px] text-fail">{bad}</span>}
+            {bad && <span role="alert" className="col-span-2 text-xs text-fail">{bad}</span>}
           </label>
         );
       })}
@@ -102,7 +102,7 @@ function Swap({ rows, title }: { rows: SwapRow[]; title: string }) {
               <th className="py-1 text-left font-medium text-muted">{x}</th>
               {a.map((y) => {
                 const v = rows.find((r) => r.before === x && r.after === y)?.apps ?? 0;
-                return <td key={y} className={cx("num py-1 text-right", x !== y && v > 0 && "font-semibold text-accent")}>{n(v)}</td>;
+                return <td key={y} className={cx("num py-1 text-right", x !== y && v > 0 && "font-semibold text-fail")}>{n(v)}</td>;
               })}
             </tr>
           ))}
@@ -162,7 +162,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
   const r = res?.result;
   const stale = !!r && (!!err || invalid);
   return (
-    <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
       <Card className="h-fit">
         <CardHeader title="Параметры стратегии" hint={d.label} />
         <div className="flex flex-col gap-4 p-4">
@@ -170,7 +170,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
             <div key={k} className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted">{p.label ?? k}</span>
               <ParamInput name={k} p={p} value={values[k]} choices={choices} errors={bad} onChange={(v) => setValues({ ...values, [k]: v })} />
-              {bad[k] && <span role="alert" className="text-[11px] text-fail">{bad[k]}</span>}
+              {bad[k] && <span role="alert" className="text-xs text-fail">{bad[k]}</span>}
             </div>
           ))}
           <button className="self-start text-xs text-accent hover:underline" onClick={() => setValues(Object.fromEntries(Object.entries(d.params).map(([k, p]) => [k, p.default])))}>сбросить к стратегии среза</button>
@@ -184,7 +184,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-busy={busy}>
           <Stat label="Доля одобрений (BEFORE)" value={r ? rate(r.approval_rate.before) : "…"} />
           <Stat label="Доля одобрений (AFTER)" value={r ? rate(r.approval_rate.after) : "…"} />
-          <Stat label="Доля одобрений («что если»)" value={r ? rate(r.approval_rate.whatif) : "…"} tone="accent" sub={r ? `${((r.approval_rate.whatif - r.approval_rate.after) * 100).toFixed(1).replace(".", ",")} п.п. к AFTER` : undefined} />
+          <Stat label="Доля одобрений («что если»)" value={r ? rate(r.approval_rate.whatif) : "…"} sub={r ? `${((r.approval_rate.whatif - r.approval_rate.after) * 100).toFixed(1).replace(".", ",")} п.п. к AFTER` : undefined} />
           <Stat
             label={`Решение изменится относительно ${r?.slice ?? "среза"}`}
             value={r ? n(r.moved) : "…"}
@@ -196,7 +196,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
           {r && <Badge tone={r.fidelity === 1 ? "pass" : "warn"}>точность воспроизведения среза {rate(r.fidelity)}</Badge>}
           {res && <Badge>пересчёт по всем заявкам {Math.round(res.ms)} мс{r?.sandbox_ms ? ` · песочница ${Math.round(r.sandbox_ms)} мс` : ""}</Badge>}
-          {busy && <Badge tone="accent">пересчёт…</Badge>}
+          {busy && <Badge>пересчёт…</Badge>}
           <span>Вся популяция{Object.keys(scope).length ? " (текущий срез)" : ""}: параметры меняют решение сразу для всех заявок, а не для одной.</span>
         </div>
         {r && (
@@ -208,7 +208,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
         {r && (
           <Card>
             <CardHeader title="Где сместится одобрение" hint="Сегменты с наибольшим числом изменившихся решений" />
-            <table className="w-full text-[13px]">
+            <div className="overflow-x-auto"><table className="w-full text-[13px]">
               <thead className="text-left text-xs text-muted"><tr className="border-b border-line"><th className="px-4 py-2 font-medium">Разрез</th><th className="px-2 py-2 text-right font-medium">Заявок</th><th className="px-2 py-2 text-right font-medium">Одобрено в срезе</th><th className="px-2 py-2 text-right font-medium">Одобрено «что если»</th><th className="px-4 py-2 text-right font-medium">Сменят решение</th></tr></thead>
               <tbody>
                 {r.segments.filter((x) => !/_(BEFORE|AFTER|CHANGED)$/.test(x.field)).slice(0, 15).map((x) => (
@@ -221,7 +221,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </Card>
         )}
         </div>

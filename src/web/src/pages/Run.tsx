@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Badge, Button, ErrorBox, Skeleton, Tabs, cx, inputCls, titleCls } from "../components/ui";
+import { Badge, Button, ErrorBox, Skeleton, Tabs, inputCls, titleCls } from "../components/ui";
 import { api, type Dataset, type Run, type Scope } from "../lib/api";
 import { useRunEvents } from "../lib/events";
 import { plural } from "../lib/format";
@@ -64,13 +64,14 @@ function ScopeBar({ runId, name, scope }: { runId: string; name: string; scope: 
   if (scope.apps) chips.push({ label: plural(scope.apps.length, "выбранная заявка", "выбранные заявки", "выбранных заявок"), drop: () => go({ ...scope, apps: undefined }) });
   if (scope.check) chips.push({ label: `${plural(scope.check.cnt, "заявка", "заявки", "заявок")} строки проверки`, drop: () => go({ ...scope, check: undefined }) });
   if (scope.cause) chips.push({ label: `причина смены решения: ${scope.cause.label}`, drop: () => go({ ...scope, cause: undefined }) });
+  if (!chips.length) return null;
   return (
     <nav aria-label="Текущий срез" className="flex flex-wrap items-center gap-1.5 text-xs">
-      <button onClick={() => go({})} className="font-medium text-accent hover:underline">
+      <button onClick={() => go({})} className="font-medium text-muted underline underline-offset-2 hover:text-fg">
         {name}: вся популяция
       </button>
       {chips.map((c) => (
-        <span key={c.label} className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent-bg px-2.5 py-0.5 text-accent">
+        <span key={c.label} className="inline-flex items-center gap-1 rounded-full border border-line-strong bg-surface px-2.5 py-0.5">
           <span aria-hidden className="text-muted">›</span>
           {c.label}
           <button onClick={c.drop} aria-label={`Убрать фильтр ${c.label}`} className="ml-0.5 text-muted hover:text-fail">
@@ -131,36 +132,14 @@ export function RunPage() {
   const setTab = (t: RunSearch["tab"]) => nav({ to: "/runs/$runId", params: { runId }, search: { tab: t, scope: search.scope, drill: t === "apps" ? search.drill : undefined } });
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-xs text-muted">
-            <Link to="/" className="hover:text-fg">Прогоны</Link>
-            <span aria-hidden>/</span>
-          </div>
-          <h1 className={cx(titleCls, "flex flex-wrap items-center gap-3")}>
-            {r.name} <StateBadge state={r.state} />
-          </h1>
-          <p className="num text-xs text-muted">
-            {plural(r.apps, "заявка", "заявки", "заявок")} · {r.total_chunks != null ? plural(r.total_chunks, "порция", "порции", "порций") : "… порций"}
-            {r.stats?.mart_rows ? <> · витрина {plural(r.stats.mart_rows, "строка", "строки", "строк")}</> : null}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {done && (
-            <>
-              <a href={`/api/runs/${runId}/export.html`} className="inline-flex h-9 items-center rounded-md border border-line-strong bg-surface px-4 text-[13px] font-medium hover:border-accent hover:text-accent">
-                Скачать HTML
-              </a>
-              <Button onClick={() => share.mutate()}>Ссылка на отчёт</Button>
-              <Link to="/workspace" search={{ run: runId }} className="inline-flex h-9 items-center rounded-md border border-line-strong bg-surface px-4 text-[13px] font-medium hover:border-accent hover:text-accent">
-                Новая проверка
-              </Link>
-            </>
-          )}
-          {!done && r.state !== "failed" && r.state !== "cancelled" && (
-            <Button variant="danger" onClick={() => cancel.mutate()}>Отменить</Button>
-          )}
-        </div>
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <Link to="/" className="text-xs text-muted hover:text-fg">Прогоны /</Link>
+        <h1 className={titleCls}>{r.name}</h1>
+        <StateBadge state={r.state} />
+        <p className="num text-xs text-muted">
+          {plural(r.apps, "заявка", "заявки", "заявок")} · {r.total_chunks != null ? plural(r.total_chunks, "порция", "порции", "порций") : "… порций"}
+          {r.stats?.mart_rows ? <> · витрина {plural(r.stats.mart_rows, "строка", "строки", "строк")}</> : null}
+        </p>
       </div>
       {share.data && (
         <div className="flex items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-xs">
@@ -173,18 +152,32 @@ export function RunPage() {
       {r.state === "receiving" && !r.seal_requested && <BatchControls run={r} />}
       {(share.error || cancel.error) && <ErrorBox error={share.error ?? cancel.error} />}
       {r.error && <ErrorBox title="Прогон завершился с ошибкой." error={r.error} debug={r.error_debug} />}
-      <Tabs
-        value={tab}
-        onChange={setTab}
-        items={[
-          { id: "overview", label: "Обзор" },
-          { id: "pivot", label: "Сводная таблица" },
-          { id: "whatif", label: "Что если" },
-          { id: "checks", label: "Автопроверки" },
-          { id: "apps", label: "Заявки" },
-          { id: "journal", label: "Журнал этапов" },
-        ]}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: "overview", label: "Обзор" },
+            { id: "apps", label: "Заявки" },
+            { id: "checks", label: "Автопроверки" },
+            { id: "pivot", label: "Сводная таблица", quiet: true },
+            { id: "whatif", label: "Что если", quiet: true },
+            { id: "journal", label: "Журнал этапов", quiet: true },
+          ]}
+        />
+        <div className="flex flex-wrap items-center gap-1 text-xs text-muted">
+          {done && (
+            <>
+              <a href={`/api/runs/${runId}/export.html`} className="rounded-md px-3 py-1 font-medium hover:bg-surface-2 hover:text-fg">Скачать HTML</a>
+              <Button variant="ghost" size="sm" onClick={() => share.mutate()}>Ссылка на отчёт</Button>
+              <Link to="/workspace" search={{ run: runId }} className="rounded-md px-3 py-1 font-medium hover:bg-surface-2 hover:text-fg">Новая проверка</Link>
+            </>
+          )}
+          {!done && r.state !== "failed" && r.state !== "cancelled" && (
+            <Button variant="danger" size="sm" onClick={() => cancel.mutate()}>Отменить</Button>
+          )}
+        </div>
+      </div>
       {done && tab !== "journal" && <ScopeBar runId={runId} name={r.name} scope={scope} />}
       {tab === "journal" && <JournalView runId={runId} live={live} />}
       {tab !== "journal" && !done && <Progress run={r} live={live} />}

@@ -66,10 +66,10 @@ export function Progress({ run, live }: { run: Run; live: { type: string; data: 
       </Card>
       <Card>
         <CardHeader title="События" hint="Приходят в реальном времени и восстанавливаются после перезагрузки страницы" />
-        <ul className="max-h-80 space-y-1 overflow-y-auto p-3 font-mono text-[11.5px]">
+        <ul className="max-h-80 space-y-1 overflow-y-auto p-3 font-mono text-xs">
           {[...live].reverse().slice(0, 80).map((e, i) => (
             <li key={i} className="flex gap-2">
-              <span className="shrink-0 text-accent" title={e.type}>{EVENT[e.type] ?? e.type}</span>
+              <span className="shrink-0 text-muted" title={e.type}>{EVENT[e.type] ?? e.type}</span>
               <span className="truncate text-muted">{eventText(e.type, e.data)}</span>
             </li>
           ))}

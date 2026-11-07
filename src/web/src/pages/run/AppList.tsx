@@ -25,7 +25,7 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
   return (
     <Card>
       <CardHeader
-        title={q.data ? `Заявки: ${n(q.data.total)}` : "Заявки"}
+        title={`${q.data ? `Заявки: ${n(q.data.total)}` : "Заявки"}${drill?.title ? ` · ${drill.title}` : ""}`}
         hint={drill?.title ? `Отбор: ${drill.title}` : "Все заявки текущего среза; клик открывает заявку с BEFORE/AFTER по каждому атрибуту"}
       />
       {q.isLoading && <Skeleton rows={8} />}
@@ -55,10 +55,10 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
                     className="absolute left-0 grid w-full grid-cols-[1fr_7rem_7rem_8rem_6rem] items-center border-b border-line px-4 text-[13px] hover:bg-surface-2"
                     style={{ top: it.start, height: it.size }}
                   >
-                    <span className="font-mono text-[12.5px] text-accent">{a.app_id}</span>
+                    <span className="font-mono text-xs underline decoration-line-strong underline-offset-2">{a.app_id}</span>
                     <span className="text-xs">{a.decision_before ?? "—"}</span>
                     <span className={a.decision_changed ? "text-xs font-semibold text-fail" : "text-xs"}>{a.decision_after ?? "—"}</span>
-                    <span>{a.decision_changed ? <Badge tone="fail">смена решения</Badge> : a.changed ? <Badge tone="accent">есть различия</Badge> : <Badge>без изменений</Badge>}</span>
+                    <span>{a.decision_changed ? <Badge tone="fail">смена решения</Badge> : a.changed ? <Badge>есть различия</Badge> : <span className="text-xs text-muted">без изменений</span>}</span>
                     <span className="num text-right text-xs text-muted">{a.cluster ? `№${a.cluster}` : "—"}</span>
                   </Link>
                 );

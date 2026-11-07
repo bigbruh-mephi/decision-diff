@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton, titleCls } from "../components/ui";
+import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton, titleCls, linkCls } from "../components/ui";
 import { api, type Run } from "../lib/api";
 import { STATE, dt, n, pct, plural } from "../lib/format";
 import { useRunEvents } from "../lib/events";
@@ -50,7 +50,7 @@ export function RunsPage() {
                   return (
                     <tr key={r.id} className="border-b border-line last:border-0 hover:bg-surface-2">
                       <td className="px-5 py-3">
-                        <Link to="/runs/$runId" params={{ runId: r.id }} search={{}} className="font-medium text-accent hover:underline">
+                        <Link to="/runs/$runId" params={{ runId: r.id }} search={{}} className={"font-medium " + linkCls}>
                           {r.name}
                         </Link>
                         {r.error && <div className="max-w-md truncate text-xs text-fail" title={r.error}>{r.error}</div>}

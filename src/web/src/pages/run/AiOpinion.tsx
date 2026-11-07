@@ -21,6 +21,7 @@ export function AiOpinion({ runId }: { runId: string }) {
     refetchInterval: (q) => (q.state.data?.state === "pending" ? 3000 : false),
   });
   const d = ai.data;
+  if (d?.state === "disabled") return <p className="text-xs text-muted" title="Укажите DD_LLM_BASE_URL, DD_LLM_API_KEY и DD_LLM_MODEL (подойдет любой сервер с OpenAI-совместимым API).">Мнение ИИ выключено: языковая модель не подключена.</p>;
   return (
     <Card>
       <CardHeader
@@ -30,7 +31,6 @@ export function AiOpinion({ runId }: { runId: string }) {
       />
       {ai.isLoading && <Skeleton rows={3} />}
       {ai.error && <ErrorBox title="Мнение ИИ недоступно." error={ai.error} />}
-      {d?.state === "disabled" && <Empty title="Языковая модель не подключена">Укажите DD_LLM_BASE_URL, DD_LLM_API_KEY и DD_LLM_MODEL (подойдет любой сервер с OpenAI-совместимым API).</Empty>}
       {d?.state === "pending" && <Empty title="Модель анализирует прогон…">Отчёт уже доступен, мнение появится здесь.</Empty>}
       {d?.state === "failed" && <ErrorBox title="Не удалось получить мнение ИИ." error={d.error ?? "причина не сохранилась"} debug={d.error_debug} />}
       {d?.state === "done" && (
@@ -44,7 +44,7 @@ export function AiOpinion({ runId }: { runId: string }) {
               </div>
               <p className="mt-1 text-[13px] text-muted">{f.text}</p>
               {f.derived_attribute && <p className="mt-1 text-xs">Производный признак: <code className="font-mono">{f.derived_attribute}</code></p>}
-              {f.check_next && <p className="mt-1 text-xs text-accent">Что проверить: {f.check_next}</p>}
+              {f.check_next && <p className="mt-1 text-xs">Что проверить: {f.check_next}</p>}
               {f.reason && <p className="mt-1 text-xs text-muted">Почему не подтверждено: {f.reason}</p>}
             </li>
           ))}

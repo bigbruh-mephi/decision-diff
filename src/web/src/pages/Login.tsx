@@ -36,7 +36,7 @@ export function LoginPage() {
         <ol className="mt-8 flex flex-col gap-3 text-[13px]">
           {["Куда сместились решения и кого это затронуло", "Логика или входные данные: кластеры изменений", "Автопроверки и свои процедуры в песочнице"].map((t, i) => (
             <li key={t} className="flex items-center gap-3">
-              <span aria-hidden className="num grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line-strong text-[11px] text-muted">{i + 1}</span>
+              <span aria-hidden className="num grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line-strong text-xs text-muted">{i + 1}</span>
               {t}
             </li>
           ))}
