@@ -12,23 +12,24 @@ import orjson
 from .errors import explain
 
 CSS = """
-:root{--bg:#fff;--fg:#14161a;--muted:#5d6470;--line:#e3e6ea;--fail:#b4232a;--fail-bg:#fdf0f0;--low:#8a6b6b;
---low-bg:#faf6f6;--pass:#2f7a4f;--accent:#2a5bd7}
-@media (prefers-color-scheme:dark){:root{--bg:#121417;--fg:#e8eaed;--muted:#9aa1ab;--line:#2a2e34;--fail:#ff6b6b;
---fail-bg:#2a1517;--low:#b89c9c;--low-bg:#1c1819;--pass:#5fc08a;--accent:#7aa2ff}}
+:root{--bg:#fff;--fg:#0f0f0f;--muted:#6b6560;--line:#eee9e3;--fail:#ad1242;--fail-bg:#fdebf0;--low:#8c5a68;
+--low-bg:#faf3f5;--pass:#1f7a4d;--accent:#d93a14}
+@media (prefers-color-scheme:dark){:root{--bg:#151210;--fg:#f5f1ed;--muted:#a89f97;--line:#2f2925;--fail:#ff7a9c;
+--fail-bg:#3b1722;--low:#c59aa6;--low-bg:#2a1f22;--pass:#6fcf9f;--accent:#ff8562}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 Inter,system-ui,sans-serif}
 main{max-width:1180px;margin:0 auto;padding:24px 16px 64px}h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;
 margin:32px 0 10px}p.sub{color:var(--muted);margin:0 0 20px}.tiles{display:grid;grid-template-columns:repeat(auto-fit,
-minmax(170px,1fr));gap:10px}.tile{border:1px solid var(--line);border-radius:10px;padding:12px 14px}.tile b{display:
+minmax(170px,1fr));gap:10px}.tile{border:1px solid var(--line);border-radius:20px;padding:12px 14px}.tile b{display:
 block;font-size:24px;font-variant-numeric:tabular-nums}.tile span{color:var(--muted);font-size:12px}table{width:100%;
 border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);
 vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12px}td.n{text-align:right;font-variant-numeric:
 tabular-nums;white-space:nowrap}code{font:12px ui-monospace,JetBrains Mono,monospace}a{color:var(--accent)}
 tr.fail td{background:var(--fail-bg)}tr.fail .res{color:var(--fail);font-weight:700}tr.low td{background:var(--low-bg);
 color:var(--low)}tr.low .res{color:var(--low);font-weight:600}tr.pass .res{color:var(--pass);font-weight:600}
-.badge{display:inline-block;padding:1px 6px;border-radius:6px;border:1px solid var(--line);font-size:11px}
+.badge{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);font-size:11px}
 .wrap{overflow-x:auto}footer{margin-top:40px;color:var(--muted);font-size:12px}
 """
+
 
 
 def _e(x):
@@ -100,6 +101,6 @@ def render(rep, run, check_results, base):
     for r in check_results:
         if r.get("error"):
             out.append(f"<tr class=fail><td>{_e(r['label'])}<td colspan=6>не выполнилась: {_e(explain(r['error']))}")
-    out.append(f"</table></div><footer>decision-diff · прогон {_e(rid)} · файл автономный, ссылки открывают "
+    out.append(f"</table></div><footer>Decision Diff · прогон {_e(rid)} · файл автономный, ссылки открывают "
                f"{_e(base)}</footer></main></body></html>")
     return "".join(out)

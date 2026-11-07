@@ -115,6 +115,14 @@ def test_xml_does_not_resolve_external_entities():
     assert "root:" not in json.dumps(tree)
 
 
+def test_sample_is_reproducible_nested_and_sorted():
+    items = [(f"I{i:03d}", None, None) for i in range(100)]
+    small, big = ingest.sample(items, 10), ingest.sample(items, 40)
+    assert small == ingest.sample(items, 10) and len(small) == 10 and small == sorted(small)
+    assert set(small) < set(big) and small != items[:10]
+    assert ingest.sample(items, None) == items and ingest.sample(items, 500) == items
+
+
 def test_bucket_labels():
     br = (0, 0.3, 0.6, 1000)
     assert bucket_label(br, "0.42") == "(0.3 – 0.6]"

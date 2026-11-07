@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Badge, Card, CardHeader, ChangeGlyph, ErrorBox, Mono, Skeleton, cx, inputCls } from "../components/ui";
+import { Badge, Card, CardHeader, ChangeGlyph, ErrorBox, Mono, Skeleton, cx, inputCls, titleCls } from "../components/ui";
 import { api, type AppDetail, type Summary } from "../lib/api";
 import { n, plural } from "../lib/format";
 
@@ -36,7 +36,7 @@ export function AppDetailPage() {
         <Link to="/runs/$runId" params={{ runId }} search={{ tab: "apps", scope }} className="text-xs text-accent hover:underline">
           ← к списку заявок
         </Link>
-        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-lg font-semibold">
+        <h1 className={cx(titleCls, "mt-1 flex flex-wrap items-center gap-3")}>
           <span className="font-mono">{a.app_id}</span>
           {db !== da ? <Badge tone="fail">{db} → {da}</Badge> : <Badge>{db}</Badge>}
           {a.cluster && (

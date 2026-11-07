@@ -14,9 +14,9 @@ export function Button({ variant = "secondary", size = "md", className, ...p }: 
       {...p}
       className={cx(
         "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
-        size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[13px]",
-        variant === "primary" && "bg-accent text-white hover:opacity-90",
-        variant === "secondary" && "border border-line-strong bg-surface hover:bg-surface-2",
+        size === "sm" ? "h-7 rounded-[10px] px-3 text-xs" : "h-9 px-4 text-[13px]",
+        variant === "primary" && "bg-accent text-on-accent hover:opacity-90",
+        variant === "secondary" && "border border-line-strong bg-surface hover:border-accent hover:text-accent",
         variant === "ghost" && "hover:bg-surface-2 text-muted hover:text-fg",
         variant === "danger" && "border border-fail/40 text-fail hover:bg-fail-bg",
         className,
@@ -26,14 +26,14 @@ export function Button({ variant = "secondary", size = "md", className, ...p }: 
 }
 
 export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <section className={cx("rounded-lg border border-line bg-surface", className)}>{children}</section>;
+  return <section className={cx("min-w-0 rounded-lg bg-surface", className)}>{children}</section>;
 }
 
 export function CardHeader({ title, hint, actions }: { title: ReactNode; hint?: ReactNode; actions?: ReactNode }) {
   return (
-    <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-line px-4 py-2.5">
+    <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-line px-5 py-3.5">
       <div className="min-w-0">
-        <h2 className="text-[13px] font-semibold">{title}</h2>
+        <h2 className="font-display text-[15px] font-medium">{title}</h2>
         {hint && <p className="text-xs text-muted">{hint}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
@@ -51,7 +51,7 @@ export function Badge({ children, tone = "neutral", title }: { children: ReactNo
     accent: "border-accent/40 bg-accent-bg text-accent",
   };
   return (
-    <span title={title} className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded border px-1.5 py-px text-[11px] font-medium", tones[tone])}>
+    <span title={title} className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-px text-[11px] font-medium", tones[tone])}>
       {children}
     </span>
   );
@@ -73,12 +73,12 @@ export function Stat({ label, value, sub, tone, onClick }: { label: string; valu
     <Comp
       onClick={onClick}
       className={cx(
-        "flex min-w-0 flex-col items-start rounded-lg border border-line bg-surface px-4 py-3 text-left",
-        onClick && "transition-colors hover:border-accent/60 hover:bg-accent-bg/40 cursor-pointer",
+        "flex min-w-0 flex-col items-start rounded-lg border border-transparent bg-surface px-4 py-4 text-left",
+        onClick && "transition-colors hover:border-accent/60 cursor-pointer",
       )}
     >
       <span className="text-xs text-muted">{label}</span>
-      <span className={cx("num mt-0.5 text-[22px] font-semibold leading-tight", tone === "fail" && "text-fail", tone === "accent" && "text-accent", tone === "warn" && "text-warn")}>{value}</span>
+      <span className={cx("num mt-1 font-display text-[24px] font-normal leading-tight", tone === "fail" && "text-fail", tone === "accent" && "text-accent", tone === "warn" && "text-warn")}>{value}</span>
       {sub && <span className="num mt-0.5 text-xs text-muted">{sub}</span>}
     </Comp>
   );
@@ -86,7 +86,7 @@ export function Stat({ label, value, sub, tone, onClick }: { label: string; valu
 
 export function Tabs<T extends string>({ value, onChange, items }: { value: T; onChange: (v: T) => void; items: { id: T; label: ReactNode }[] }) {
   return (
-    <div role="tablist" className="flex gap-1 overflow-x-auto border-b border-line">
+    <div role="tablist" className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-2xl bg-surface p-1 [scrollbar-width:none]">
       {items.map((it) => (
         <button
           key={it.id}
@@ -94,8 +94,8 @@ export function Tabs<T extends string>({ value, onChange, items }: { value: T; o
           aria-selected={value === it.id}
           onClick={() => onChange(it.id)}
           className={cx(
-            "-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium transition-colors",
-            value === it.id ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg",
+            "whitespace-nowrap rounded-md px-4 py-2 text-[13px] font-medium transition-colors",
+            value === it.id ? "bg-accent text-on-accent" : "text-muted hover:text-fg",
           )}
         >
           {it.label}
@@ -153,7 +153,7 @@ export function Bar({ parts, total }: { parts: { value: number; className: strin
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
   return (
-    <label className="flex flex-col gap-1">
+    <label className="flex min-w-0 flex-col gap-1">
       <span className="text-xs font-medium text-muted">{label}</span>
       {children}
       {hint && <span className="text-[11px] text-muted">{hint}</span>}
@@ -161,7 +161,20 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-export const inputCls = "h-8 rounded-md border border-line-strong bg-surface px-2.5 text-[13px] outline-none focus:border-accent";
+export const inputCls = "h-9 min-w-0 max-w-full rounded-md border border-line-strong bg-surface px-2.5 text-[13px] outline-none focus:border-accent";
+
+export const titleCls = "font-display text-[32px] font-normal leading-tight tracking-tight";
+
+export function Logo() {
+  return (
+    <span className="inline-flex flex-col font-display text-[11px] font-semibold uppercase leading-[1.1] tracking-[0.06em]">
+      Decision
+      <br />
+      Diff
+      <span aria-hidden className="mt-1 h-[3px] w-full rounded-full bg-brand" />
+    </span>
+  );
+}
 
 export function Mono({ children, className }: { children: ReactNode; className?: string }) {
   return <code className={cx("font-mono text-[12px]", className)}>{children}</code>;

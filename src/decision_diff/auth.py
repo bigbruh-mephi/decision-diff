@@ -14,6 +14,7 @@ from fastapi import Request
 from .errors import Problem
 
 COOKIE = "__Host-dd_session"
+PLAIN_COOKIE = "dd_session"
 SESSION_DAYS = 14
 HASHER = PasswordHasher(time_cost=2, memory_cost=19 * 1024, parallelism=1)
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -41,6 +42,16 @@ def verify_password(hashed, password):
         return False
 
 
+def session_cookie(request: Request):
+    """``(name, secure)`` of the session cookie: browsers drop Secure cookies over plain HTTP on anything but localhost."""
+    return (COOKIE, True) if request.url.scheme == "https" else (PLAIN_COOKIE, False)
+
+
+def session_token(request: Request):
+    """Only the cookie this scheme writes: a stale ``__Host-`` one must not shadow it on localhost, nor a plain one pass on HTTPS."""
+    return request.cookies.get(session_cookie(request)[0])
+
+
 def csrf_ok(request: Request):
     """Fetch-Metadata check: browsers send Sec-Fetch-Site; cross-site unsafe requests are rejected."""
     if request.method in SAFE_METHODS:
@@ -54,7 +65,7 @@ def csrf_ok(request: Request):
 
 async def current(request: Request, pool):
     """``{"user_id", "login", "run_id"}`` of the request's session; raises 401 without a valid session."""
-    token = request.cookies.get(COOKIE)
+    token = session_token(request)
     if not token:
         raise Problem(401, "not_signed_in", "Вы не вошли в систему: войдите, чтобы продолжить.")
     async with pool.connection() as c:

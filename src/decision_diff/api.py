@@ -101,6 +101,11 @@ class Credentials(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class LoginBody(Credentials):
+    # Length is a sign-up rule; the admin password comes from .env and is not bound by it
+    password: str = Field(min_length=1, max_length=256)
+
+
 _HASH_SLOTS = asyncio.Semaphore(4)
 
 
@@ -111,7 +116,7 @@ async def _argon(fn, *args):
 
 
 @app.post("/api/auth/register")
-async def register(body: Credentials, response: Response):
+async def register(body: Credentials, request: Request, response: Response):
     async with pool().connection() as c:
         n = (await (await c.execute("SELECT count(*) AS n FROM users")).fetchone())["n"]
         if n and not settings_flag("DD_OPEN_REGISTRATION"):
@@ -122,24 +127,25 @@ async def register(body: Credentials, response: Response):
         except Exception as e:
             raise errors.Problem(409, "login_taken", "Этот логин уже занят: выберите другой.", "login") from e
         await c.execute("INSERT INTO audit (user_id, action) VALUES (%s, 'register')", (row["id"],))
-        return await _login(c, row["id"], body.login, response)
+        return await _login(c, row["id"], body.login, request, response)
 
 
 def settings_flag(name):
     return os.environ.get(name, "0") in ("1", "true", "yes")
 
 
-async def _login(c, user_id, login, response, run_id=None, days=auth.SESSION_DAYS):
+async def _login(c, user_id, login, request, response, run_id=None, days=auth.SESSION_DAYS):
     token = auth.new_token()
     await c.execute("INSERT INTO sessions (token_hash, user_id, run_id, expires_at) "
                     "VALUES (%s, %s, %s, now() + make_interval(days => %s))",
                     (auth.token_hash(token), user_id, run_id, days))
-    response.set_cookie(auth.COOKIE, token, max_age=days * 86400, httponly=True, secure=True, samesite="lax", path="/")
+    name, secure = auth.session_cookie(request)
+    response.set_cookie(name, token, max_age=days * 86400, httponly=True, secure=secure, samesite="lax", path="/")
     return {"user_id": str(user_id) if user_id else None, "login": login, "run_id": str(run_id) if run_id else None}
 
 
 @app.post("/api/auth/login")
-async def login(body: Credentials, request: Request, response: Response):
+async def login(body: LoginBody, request: Request, response: Response):
     ip = request.client.host if request.client else ""
     async with pool().connection() as c:
         failed = await (await c.execute("""SELECT count(*) FILTER (WHERE target = %s) AS login,
@@ -157,16 +163,17 @@ async def login(body: Credentials, request: Request, response: Response):
             await c.commit()
             raise errors.Problem(401, "wrong_credentials", "Неверный логин или пароль.")
         await c.execute("INSERT INTO audit (user_id, action) VALUES (%s, 'login')", (row["id"],))
-        return await _login(c, row["id"], body.login, response)
+        return await _login(c, row["id"], body.login, request, response)
 
 
 @app.post("/api/auth/logout")
 async def logout(request: Request, response: Response):
-    token = request.cookies.get(auth.COOKIE)
+    token = auth.session_token(request)
     if token:
         async with pool().connection() as c:
             await c.execute("DELETE FROM sessions WHERE token_hash = %s", (auth.token_hash(token),))
-    response.delete_cookie(auth.COOKIE, path="/")
+    name, secure = auth.session_cookie(request)
+    response.delete_cookie(name, path="/", secure=secure)
     return {"ok": True}
 
 
@@ -465,6 +472,11 @@ async def create_run(body: RunBody, s=Depends(user)):
         if not sel or not dataset:
             raise errors.Problem(422, "run_incomplete", "Для запуска нужны датасет и процедуры (или сохраненная "
                                                      "конфигурация).", "dataset" if sel else "procedures")
+        sample = params.get("sample_apps")
+        if sample is not None and (type(sample) is not int or sample < 1):
+            raise errors.Problem(422, "bad_sample", "Размер выборки должен быть положительным целым числом.", "sample_apps")
+        if sample and not body.seal:
+            raise errors.Problem(422, "sample_with_batches", "Выборку нельзя совмещать с догрузкой порций.", "sample_apps")
         source = _resolve_dataset(dataset, s)
         try:
             snap = await catalog.snapshot(c, sel.model_dump(mode="json"), params, s["user_id"])
@@ -478,7 +490,7 @@ async def create_run(body: RunBody, s=Depends(user)):
                         (s["user_id"], str(run_id)))
     await queue.publish(STATE["ch"], queue.WORK, {"kind": "ingest", "run_id": str(run_id),
                                                   "user_id": str(s["user_id"]), "source": str(source),
-                                                  "seal": body.seal})
+                                                  "seal": body.seal, "sample": sample})
     return await get_run(run_id, s)
 
 
@@ -912,7 +924,7 @@ async def open_share(token: str, request: Request):
         except HTTPException:
             signed_in = False
         if not signed_in:
-            await _login(c, None, None, resp, run_id=row["run_id"], days=1)
+            await _login(c, None, None, request, resp, run_id=row["run_id"], days=1)
     return resp
 
 

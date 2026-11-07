@@ -22,7 +22,7 @@ class Settings:
     delivery_limit: int = field(default_factory=lambda: int(_env("DD_DELIVERY_LIMIT", "5")))
     sandbox: str = field(default_factory=lambda: _env("DD_SANDBOX", "strict"))
     sandbox_uid: int | None = field(default_factory=lambda: int(_env("DD_SANDBOX_UID", "20000")))
-    sandbox_mem_mb: int = field(default_factory=lambda: int(_env("DD_SANDBOX_MEM_MB", "4096")))
+    sandbox_mem_mb: int = field(default_factory=lambda: int(_env("DD_SANDBOX_MEM_MB", "8192")))
     sandbox_wall_s: int = field(default_factory=lambda: int(_env("DD_SANDBOX_WALL_S", "300")))
     llm_base_url: str = field(default_factory=lambda: _env("DD_LLM_BASE_URL", ""))
     llm_api_key: str = field(default_factory=lambda: _env("DD_LLM_API_KEY", ""), repr=False)

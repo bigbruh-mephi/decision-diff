@@ -65,7 +65,7 @@ class Worker:
             if not done:
                 await db.event(c, run_id, "ingest.started", {"source": t["source"], "resumed": bool(have)})
         try:
-            items = await self.cpu_trusted(pipeline.list_pairs, t["source"])
+            items = await self.cpu_trusted(pipeline.list_pairs, t["source"], t.get("sample"))
         except DETERMINISTIC as e:
             async with self.pool.connection() as c:
                 await c.execute("UPDATE runs SET state = 'failed', error = %s, finished_at = now() WHERE id = %s",

@@ -35,7 +35,7 @@ def evaluate(data, params):
 
 PROCEDURE = {
     "id": "spr_whatif_cutoff_rules",
-    "label": "СПР: что если для порогов, стоп-факторов и целевой модели",
+    "label": "СПР: что если поменять пороги, стоп-факторы и целевую модель",
     "kind": "whatif",
     "unit_depth": 1,
     "inputs": {
@@ -54,7 +54,7 @@ PROCEDURE = {
         "cutoffs": {"type": "float_map", "keys_from": "cut_name", "min": 0.0, "max": 1.0, "step": 0.01,
                     "default": {}, "label": "Порог по имени (пустое поле - как в срезе)"},
         "rules_off": {"type": "multi", "values_from": "hit", "default": [], "label": "Отключённые стоп-факторы"},
-        "target_model": {"type": "enum", "values_from": "models", "default": "", "label": "Целевая скоринговая модель"},
+        "target_model": {"type": "enum", "values_from": "models", "default": "", "label": "Целевая модель скоринга"},
     },
     "factors": {
         "cutoff": {"label": "порог", "inputs": ["cut", "cut_name"]},

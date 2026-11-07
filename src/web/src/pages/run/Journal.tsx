@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { CodeView } from "../../components/CodeView";
-import { Badge, Button, Card, CardHeader, ErrorBox, Mono, Skeleton } from "../../components/ui";
+import { Badge, Button, Card, CardHeader, ErrorBox, Skeleton } from "../../components/ui";
 import { api, type Journal } from "../../lib/api";
 import { CHUNK_STATE, EVENT, KIND, dt, eventText, ms, n, plural } from "../../lib/format";
 
@@ -80,7 +80,6 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                   <tr key={s.stage + s.code_sha} className="border-b border-line last:border-0">
                     <td className="px-4 py-2">
                       <div className="font-medium">{stageTitle(s.stage)}</div>
-                      <Mono className="text-muted">{s.stage}</Mono>
                       {s.error && <ErrorBox inline error={s.error} debug={s.error_debug} />}
                     </td>
                     <td className="num px-2 py-2">

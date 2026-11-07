@@ -35,7 +35,7 @@ export function ChecksView({ runId }: { runId: string }) {
           actions={
             <div className="flex gap-1">
               {(["all", "fail", "pass"] as const).map((f) => (
-                <button key={f} onClick={() => setFilter(f)} className={cx("rounded px-2 py-1 text-xs", filter === f ? "bg-accent text-white" : "text-muted hover:bg-surface-2")}>
+                <button key={f} onClick={() => setFilter(f)} className={cx("rounded px-2 py-1 text-xs", filter === f ? "bg-accent text-on-accent" : "text-muted hover:bg-surface-2")}>
                   {f === "all" ? "все" : f === "fail" ? "FAIL" : "PASS"}
                 </button>
               ))}
@@ -65,7 +65,7 @@ export function ChecksView({ runId }: { runId: string }) {
                     <tr key={i} className={cx("border-b border-line last:border-0", v.row)}>
                       <td className="px-4 py-1.5">
                         {r.LABEL}
-                        <div className="text-[11px] text-muted">{r.check.check_id} · {ms(r.check.duration_ms)} · код {r.check.check_sha.slice(0, 7)}</div>
+                        <div className="text-[11px] text-muted">{ms(r.check.duration_ms)} · код {r.check.check_sha.slice(0, 7)}</div>
                       </td>
                       <td className="px-2 py-1.5 text-xs">{r.SOURCE === "AFTER" ? "AFTER (BETA)" : "BEFORE (MASTER)"}</td>
                       <td className="max-w-80 truncate px-2 py-1.5" title={r.ARGUMENT}><Mono>{r.ARGUMENT || "—"}</Mono></td>
