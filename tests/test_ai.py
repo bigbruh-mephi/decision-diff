@@ -207,10 +207,7 @@ def test_opinion_end_to_end_against_fake_endpoint(run):
          "evidence": ["X1"], "text": "score dropped by a constant in {X1.n_true} apps", "check_next": "the source"},
         {"title": "made up", "severity": "low", "claim_type": "single_item", "evidence": ["H1"],
          "text": "about 12 apps", "check_next": ""}]}
-    call3 = {"analysis": "a", "findings": [
-        {"title": "share of shifted", "severity": "low", "claim_type": "single_item", "evidence": ["X1"],
-         "text": "{X1.share_true:%} of apps", "check_next": ""}]}
-    fake = FakeLLM([(200, json.dumps(call1)), (200, json.dumps(call2)), (200, json.dumps(call3))])
+    fake = FakeLLM([(200, json.dumps(call1)), (200, json.dumps(call2))])
     try:
         res = ai.opinion(*run, client=fake.client())
     finally:
@@ -219,7 +216,7 @@ def test_opinion_end_to_end_against_fake_endpoint(run):
     assert res["measurements"][0]["n_true"] == N // 4 and "refused" in res["measurements"][1]
     f, g = res["findings"]
     assert f["text"] == f"score dropped by a constant in {N // 4} apps" and f["verified"]
-    assert g["text"] == "25,0 % of apps" and "call3_s" in res["timings"]
+    assert g["title"] == "made up" and not g["verified"] and "числа вписаны моделью" in g["reason"]
     assert set(f) == {"title", "severity", "text", "derived_attribute", "evidence", "verified", "check_next"}
     assert [r["title"] for r in res["rejected"]] == ["made up"]
     sent = json.dumps(fake.requests)

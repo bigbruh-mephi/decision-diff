@@ -1,10 +1,10 @@
 """AI second opinion (research R10): evidence pack -> call 1 hypotheses -> system measures -> call 2 findings -> verify.
 
-The model never sees application ids and never produces a number the system did not measure: derived attributes are
-scalar SQL expressions over declared per-application variables, whitelisted on DuckDB's own AST and evaluated on a
-read-only connection with external access disabled; findings carry numbers only as ``{ID.field}`` placeholders that
-the verifier fills from the pack or the measurements, and a claim about how two sets relate needs a measurement that
-confirms it (fail closed). Everything here is generic: paths and the decision field come from the run and its params.
+The model is a second analyst, not a source of truth. It never sees application ids; derived attributes are scalar
+SQL expressions over declared per-application variables, whitelisted on DuckDB's own AST and evaluated on a read-only
+connection with external access disabled. Findings carry numbers as ``{ID.field}`` placeholders the verifier fills
+from the pack or the measurements; a finding whose numbers or set relations the system cannot confirm is still shown,
+after the confirmed ones, marked unverified with the reason. Everything here is generic: paths and the decision field come from the run and its params.
 """
 
 import fnmatch
@@ -84,12 +84,6 @@ JSON schema of your answer:
 (The conversation continues from your call-1 answer; the evidence pack above is still valid.)
 MEASUREMENTS X:
 {derived}"""
-
-REPAIR = """The system rejected these findings (reason given; nothing else was wrong with them):
-{rejected}
-Rewrite ONLY these findings with the same JSON schema: every count or share as a placeholder {{ID.field}} or
-{{ID.field:%}} of a cited item, attribute values in backticks, no other digits in title, text or check_next. Drop a
-finding if its number is not in any item."""
 
 DERIVED = {"type": "object", "required": ["name", "why", "vars", "expr"],
            "properties": {"name": {"type": "string"}, "why": {"type": "string"},
@@ -536,13 +530,14 @@ def _apps(item):
 
 
 def verify(findings, idx):
-    """Fail-closed verification of call-2 findings against ``idx`` (pack items and measurements by id).
+    """Verification of call-2 findings against ``idx`` (pack items and measurements by id).
 
-    Evidence written as a placeholder (``X7.n_true``) counts as its item id (``X7``). A finding is rejected when it
+    Evidence written as a placeholder (``X7.n_true``) counts as its item id (``X7``). A finding is unverified when it
     cites an unknown id, when a number in its text is typed instead of a placeholder
     or a placeholder does not resolve to a cited item (``name=value`` pairs and names with digits such as
     ``RULE_2026`` are identifiers, not numbers), or when it is a ``relation`` claim without an evaluated
-    measurement, without ``expects`` or contradicted by the measurement. Returns ``(findings, rejected)``.
+    measurement, without ``expects`` or contradicted by the measurement. Returns ``(verified, unverified)``; an
+    unverified finding keeps its content with ``verified: False`` and a Russian ``reason``.
     """
     kept, rejected = [], []
     for f in findings if isinstance(findings, list) else []:
@@ -552,16 +547,17 @@ def verify(findings, idx):
         xs = [idx[e] for e in ev if e in idx and "n_true" in idx[e]]
         reason, numbers = None, 0
         if not ev or any(e not in idx for e in ev):
-            reason = f"unknown evidence {[e for e in ev if e not in idx] or 'none'}"
+            reason = f"ссылается на данные, которых нет в пакете: {[e for e in ev if e not in idx] or 'ничего'}"
         elif f.get("claim_type") == "relation":
             exp = f.get("expects")
             if not xs:
-                reason = "relation without a measurement"
+                reason = "связь не измерена системой"
             elif exp not in ("none", "some", "all"):
-                reason = "relation without expects"
+                reason = "связь без ожидаемого результата"
             elif any((exp == "none" and x["n_true"] > 0) or (exp == "some" and x["n_true"] == 0) or
                      (exp == "all" and x["n_true"] != x["n_population"]) for x in xs):
-                reason = "refuted by measurement " + ", ".join(f"{x['id']}.n_true={x['n_true']}" for x in xs)
+                reason = "измерение не подтверждает утверждение: " + ", ".join(
+                    f"{x['id']}: {x['n_true']} из {x['n_population']}" for x in xs)
         out = {}
         for key in ("title", "text", "check_next"):
             text, bad = str(f.get(key) or ""), []
@@ -577,17 +573,15 @@ def verify(findings, idx):
             numbers += len(PH.findall(text)) - len(bad)
             bad += DIGITS.findall(NAME.sub("", ATTR.sub("", IDS.sub("", TICK.sub("", PH.sub("", text))))))
             if bad and not reason:
-                reason = f"numbers not from the system in {key}: {bad[:5]}"
-        if reason:
-            rejected.append({"title": out.get("title") or str(f.get("title")), "reason": reason})
-            continue
+                reason = f"числа вписаны моделью, а не взяты из измерений: {bad[:5]}"
         x = xs[0] if xs else None
-        kept.append({"title": out["title"], "severity": f.get("severity") if f.get("severity") in
-                     ("high", "medium", "low") else "low", "text": out["text"],
-                     "derived_attribute": f"{x['name']}: {x['expr']}" if x else None,
-                     "evidence": [{"label": e + (f" {idx[e]['name']}" if "name" in idx[e] else ""),
-                                   "apps": _apps(idx[e])} for e in ev],
-                     "verified": bool(numbers or xs), "check_next": out["check_next"] or None})
+        item = {"title": out["title"], "severity": f.get("severity") if f.get("severity") in
+                ("high", "medium", "low") else "low", "text": out["text"],
+                "derived_attribute": f"{x['name']}: {x['expr']}" if x else None,
+                "evidence": [{"label": e + (f" {idx[e]['name']}" if "name" in idx.get(e, {}) else ""),
+                              "apps": _apps(idx[e]) if e in idx else None} for e in ev],
+                "verified": not reason and bool(numbers or xs), "check_next": out["check_next"] or None}
+        (rejected if reason else kept).append({**item, "reason": reason} if reason else item)
     return kept, rejected
 
 
@@ -706,24 +700,17 @@ def opinion(run_file, params, checks=(), client=None):
         t["measure_s"] = round(time.perf_counter() - t1, 2)
         msgs.append({"role": "user", "content": CALL2.format(max_f=7, schema=_dump(SCHEMA2), derived=_dump(xs))})
         t1 = time.perf_counter()
-        a2, msgs = client.chat(msgs, SCHEMA2, "findings")
+        a2, _ = client.chat(msgs, SCHEMA2, "findings")
         t["call2_s"] = round(time.perf_counter() - t1, 2)
         idx = {it["id"]: it for items in pack.values() for it in items} | {x["id"]: x for x in xs}
-        findings, rejected = verify(a2.get("findings"), idx)
-        a3 = None
-        if any(r["reason"].startswith("numbers not from the system") for r in rejected):
-            msgs.append({"role": "user", "content": REPAIR.format(rejected=_dump(rejected))})
-            t1 = time.perf_counter()
-            a3, _ = client.chat(msgs, SCHEMA2, "findings")
-            t["call3_s"] = round(time.perf_counter() - t1, 2)
-            fixed, still = verify(a3.get("findings"), idx)
-            findings += [f for f in fixed if f["title"] not in {g["title"] for g in findings}]
-            rejected = still + [r for r in rejected if r["title"] not in {f["title"] for f in fixed + still}]
+        kept, unverified = verify(a2.get("findings"), idx)
+        findings = kept + unverified
     finally:
         rep.con.close()
     t["total_s"] = round(time.perf_counter() - t0, 2)
-    return {"state": "done", "model": client.model, "findings": findings, "rejected": rejected, "measurements": xs,
+    return {"state": "done", "model": client.model, "findings": findings,
+            "rejected": [{"title": f["title"], "reason": f["reason"]} for f in unverified], "measurements": xs,
             "usage": {**client.usage, "pack_tokens_est": tokens(pack), "mode": client.mode}, "timings": t,
             "privacy": {"pii_paths": list(params.get("pii_paths") or []), "masked_values": mask.masked,
                         "app_ids_sent": False},
-            "audit": {"call1": a1, "call2": a2, "call3": a3}, "error": None}
+            "audit": {"call1": a1, "call2": a2}, "error": None}

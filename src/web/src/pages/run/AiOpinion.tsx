@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton } from "../../components/ui";
 import { ApiError, api } from "../../lib/api";
 
-type Finding = { title: string; severity: "high" | "medium" | "low"; text: string; derived_attribute?: string; evidence?: { label: string; apps?: number }[]; verified: boolean; check_next?: string };
+type Finding = { title: string; severity: "high" | "medium" | "low"; text: string; derived_attribute?: string; evidence?: { label: string; apps?: number }[]; verified: boolean; check_next?: string; reason?: string };
 type Ai = { state: "disabled" | "pending" | "done" | "failed"; model?: string; findings?: Finding[]; error?: string; error_debug?: string };
 
 const SEVERITY = { high: "важно", medium: "средне", low: "к сведению" };
@@ -25,7 +25,7 @@ export function AiOpinion({ runId }: { runId: string }) {
     <Card>
       <CardHeader
         title="Альтернативное мнение ИИ"
-        hint="Второй взгляд на прогон: метавыводы и производные признаки. Каждое число сверено с витриной; непроверенные утверждения отбрасываются"
+        hint="Второй взгляд на прогон, а не источник истины: сначала выводы, подтвержденные измерениями по всем заявкам, затем гипотезы модели без подтверждения - бледно и с причиной"
         actions={d?.model ? <Badge>{d.model}</Badge> : undefined}
       />
       {ai.isLoading && <Skeleton rows={3} />}
@@ -36,15 +36,16 @@ export function AiOpinion({ runId }: { runId: string }) {
       {d?.state === "done" && (
         <ul className="divide-y divide-line">
           {(d.findings ?? []).map((f, i) => (
-            <li key={i} className="px-4 py-3">
+            <li key={i} className={f.verified ? "px-4 py-3" : "px-4 py-3 opacity-70"}>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone={f.severity === "high" ? "fail" : f.severity === "medium" ? "warn" : "neutral"}>{SEVERITY[f.severity] ?? f.severity}</Badge>
                 <span className="font-medium">{f.title}</span>
-                {f.verified ? <Badge tone="pass">числа сверены</Badge> : <Badge tone="low">не проверено</Badge>}
+                {f.verified ? <Badge tone="pass">числа сверены</Badge> : <Badge tone="low">не подтверждено системой</Badge>}
               </div>
               <p className="mt-1 text-[13px] text-muted">{f.text}</p>
               {f.derived_attribute && <p className="mt-1 text-xs">Производный признак: <code className="font-mono">{f.derived_attribute}</code></p>}
               {f.check_next && <p className="mt-1 text-xs text-accent">Что проверить: {f.check_next}</p>}
+              {f.reason && <p className="mt-1 text-xs text-muted">Почему не подтверждено: {f.reason}</p>}
             </li>
           ))}
         </ul>
