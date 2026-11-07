@@ -7,12 +7,45 @@ AFTER (BETA) — к вертикальной витрине, сравнивае�
 
 ## Быстрый старт (чистая машина, нужен только Docker)
 
+Требования: 64-битная Linux, macOS или Windows 10/11, 4 ядра и 8 ГБ памяти (воркеру выделено до 4 ГБ), 5 ГБ на диске
+плюс место под датасеты, доступ в интернет для первой сборки.
+
+### 1. Установите Docker и git
+
+**Linux (Ubuntu, Debian, Fedora и др.)** — официальный скрипт ставит Docker Engine и плагин Compose:
+
+```bash
+sudo apt-get update && sudo apt-get install -y git curl   # Fedora: sudo dnf install -y git curl
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER && newgrp docker            # docker без sudo в текущей сессии
+```
+
+**macOS** — установите [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/) (Apple Silicon или
+Intel), запустите его и дождитесь статуса "Engine running". git ставится командой `xcode-select --install`.
+
+**Windows 10/11** — установите [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) с
+бэкендом WSL 2 (установщик предложит включить WSL) и [Git for Windows](https://git-scm.com/download/win). Команды ниже
+выполняйте в терминале WSL (Ubuntu) или в Git Bash.
+
+Проверьте, что всё на месте (нужен Compose v2: команда `docker compose`, а не `docker-compose`):
+
+```bash
+docker --version && docker compose version && git --version
+docker run --rm hello-world
+```
+
+### 2. Поднимите приложение
+
 ```bash
 git clone https://github.com/bigbruh-mephi/decision-diff.git && cd decision-diff
-cp .env.example .env            # поменяйте пароли
+cp .env.example .env            # задайте пароли DD_ADMIN_PASSWORD, DD_PG_PASSWORD, DD_AMQP_PASSWORD
 mkdir -p datasets && cp -r /путь/к/RUN-20260827-0001 datasets/
-docker compose up -d --build
+docker compose up -d --build    # первая сборка 3-10 минут, дальше секунды
+docker compose ps               # api, worker, postgres, rabbitmq: running / healthy
 ```
+
+Без паролей в `.env` compose остановится с подсказкой, какую переменную задать. Остановить: `docker compose down`
+(данные сохраняются в томах; `down -v` удалит их). Обновить после `git pull`: `docker compose up -d --build`.
 
 Откройте http://localhost:8080 и войдите как `admin` с паролем `DD_ADMIN_PASSWORD` из `.env`. Остальные пользователи
 регистрируются на странице входа (`DD_OPEN_REGISTRATION=1`; в общей сети поставьте `0`). По адресу машины в сети
@@ -32,8 +65,8 @@ docker compose up -d --build
 ```bash
 cp /путь/к/пакету/checks/check_*.py procedures/checks/ && docker compose restart api
 ```
- Свои процедуры и проверки
-можно писать в «Рабочей области» приложения.
+
+Свои процедуры и проверки можно писать в «Рабочей области» приложения.
 
 ## Как пользоваться (сценарий демонстрации)
 
