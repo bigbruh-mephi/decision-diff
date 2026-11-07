@@ -29,6 +29,9 @@ def hash_password(password):
     return HASHER.hash(password)
 
 
+DUMMY_HASH = hash_password(secrets.token_urlsafe(16))
+
+
 def verify_password(hashed, password):
     try:
         return HASHER.verify(hashed, password)

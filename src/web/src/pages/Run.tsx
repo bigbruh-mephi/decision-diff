@@ -162,6 +162,7 @@ export function RunPage() {
           <Badge tone="accent">только чтение · 30 дней</Badge>
           <input readOnly value={share.data.url} className={inputCls + " h-7 flex-1 font-mono text-xs"} onFocus={(e) => e.target.select()} aria-label="Ссылка на отчёт" />
           <Button size="sm" onClick={() => navigator.clipboard?.writeText(share.data.url)}>Копировать</Button>
+          <Button size="sm" variant="danger" onClick={() => api.del(`/api/runs/${runId}/share`).then(() => share.reset())}>Отозвать все ссылки</Button>
         </div>
       )}
       {r.state === "receiving" && <BatchControls run={r} />}

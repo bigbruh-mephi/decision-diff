@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS audit (
     target text,
     data jsonb NOT NULL DEFAULT '{}'
 );
+CREATE INDEX IF NOT EXISTS audit_action_ts ON audit (action, ts);
 
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS report_params jsonb;
 

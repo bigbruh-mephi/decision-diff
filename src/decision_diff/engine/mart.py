@@ -15,9 +15,14 @@ def _as_list(v):
 
 
 def open_run(path, threads=4, memory_limit="1GB"):
-    """Read-only DuckDB connection to a run file with external access disabled."""
+    """Read-only DuckDB connection to a run file with external access disabled.
+
+    ``async_threads=0``: DuckDB 2.0 otherwise starts 4 x cores I/O threads per connection, which a sandbox
+    (``RLIMIT_NPROC`` 64, ``RLIMIT_AS``) cannot afford; measured no slowdown on a 100k-application run file.
+    """
     return duckdb.connect(str(path), read_only=True,
-                          config={"threads": threads, "memory_limit": memory_limit, "enable_external_access": False,
+                          config={"threads": threads, "async_threads": 0, "memory_limit": memory_limit,
+                                  "enable_external_access": False,
                                   "autoinstall_known_extensions": False, "autoload_known_extensions": False})
 
 
