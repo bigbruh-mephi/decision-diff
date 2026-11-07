@@ -28,7 +28,7 @@ async def _procedure(c, s, pid):
         WHERE p.kind = 'whatif' AND (p.origin = 'file' OR p.owner_id = %s) AND (%s::uuid IS NULL OR p.id = %s)
         ORDER BY p.updated_at DESC LIMIT 1""", (s["user_id"], pid, pid))).fetchone()
     if not row:
-        raise HTTPException(404, "no whatif procedure")
+        raise HTTPException(404, "процедура «что если» не найдена")
     try:
         return row, whatif.declaration(row["code"], row["name"])
     except procedures.ProcedureError as e:
@@ -79,7 +79,7 @@ async def get_whatif_result(exec_id: uuid.UUID, s=Depends(user)):
         row = await (await c.execute("SELECT * FROM whatif_runs WHERE id = %s AND user_id = %s",
                                      (exec_id, s["user_id"]))).fetchone()
     if not row:
-        raise HTTPException(404, "what-if evaluation not found")
+        raise HTTPException(404, "расчёт «что если» не найден")
     out = {k: row[k] for k in ("id", "run_id", "state", "values", "scope", "created_at", "finished_at")}
     res = row["result"] or {}
     if row["state"] == "done":

@@ -5,12 +5,21 @@ A run folder holds ``manifest.json`` (optional) with ``srez.{BEFORE,AFTER}.dir``
 """
 
 import io
+import random
 import zipfile
 from pathlib import Path
 
 import orjson
 
 from .formats import parse
+
+
+def sample(items, n):
+    """``n`` random ``pairs`` items, or all without ``n``. A fixed seed keeps runs comparable: the same ``n`` picks the
+    same applications and a smaller ``n`` is a subset of a larger one."""
+    if not n or n >= len(items):
+        return items
+    return sorted(random.Random(0).sample(items, len(items))[:n], key=lambda item: item[0])
 
 
 def read_manifest(run_dir):

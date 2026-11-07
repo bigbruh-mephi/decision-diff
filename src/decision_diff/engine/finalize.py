@@ -112,7 +112,7 @@ def _facts(con, max_values):
     rows = con.execute(f"""
         WITH card AS (SELECT path_id, count(DISTINCT ADJUSTED_VALUE) AS n FROM mart GROUP BY path_id)
         SELECT m.path_id, m.ARRAY_KEY,
-               CASE WHEN c.n > {int(max_values)} THEN '(' || c.n || ' distinct)' ELSE m.ADJUSTED_VALUE END AS AV,
+               CASE WHEN c.n > {int(max_values)} THEN '(' || c.n || ' различных)' ELSE m.ADJUSTED_VALUE END AS AV,
                m.DIFF_FLAG, m.CHANGE_TYPE, m.SOURCE, list(DISTINCT m.app_ord ORDER BY m.app_ord)
         FROM mart m JOIN card c USING (path_id)
         GROUP BY ALL""").fetchall()

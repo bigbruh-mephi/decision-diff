@@ -78,6 +78,7 @@ services:
       <<: *app-env
       DD_USER_WINDOW: ${DD_USER_WINDOW:-4}
       DD_SANDBOX: ${DD_SANDBOX:-strict}
+      DD_SANDBOX_MEM_MB: ${DD_SANDBOX_MEM_MB:-8192}
       DD_LLM_BASE_URL: ${DD_LLM_BASE_URL:-}
       DD_LLM_API_KEY: ${DD_LLM_API_KEY:-}
       DD_LLM_MODEL: ${DD_LLM_MODEL:-}

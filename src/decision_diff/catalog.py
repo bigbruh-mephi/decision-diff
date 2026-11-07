@@ -18,8 +18,8 @@ async def sync_files(c, root, owner_id=None):
         name = str(f.relative_to(root))
         await db.store_code(c, spec["kind"], name, code, spec["sha"])
         row = await (await c.execute("""
-            UPDATE procedures SET sha = %s, kind = %s, updated_at = now() WHERE origin = 'file' AND path = %s
-            RETURNING id""", (spec["sha"], spec["kind"], name))).fetchone()
+            UPDATE procedures SET sha = %s, kind = %s, name = %s, updated_at = now() WHERE origin = 'file' AND path = %s
+            RETURNING id""", (spec["sha"], spec["kind"], spec["label"], name))).fetchone()
         if row is None:
             row = await (await c.execute("""
                 INSERT INTO procedures (owner_id, kind, name, origin, path, sha) VALUES (%s, %s, %s, 'file', %s, %s)
