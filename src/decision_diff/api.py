@@ -724,7 +724,7 @@ async def summary(run_id: uuid.UUID, request: Request, s=Depends(session)):
     spec = _scope(request)
     return _cached(request, run_id, "summary", lambda: {
         **rep.summary(spec), "run": {"id": row["id"], "name": row["name"], "stats": row["stats"]},
-        "clusters": rep.cluster_rows(spec)})
+        "clusters": rep.cluster_rows(spec), "structure": rep.structure[:50]})
 
 
 @app.get("/api/runs/{run_id}/clusters")

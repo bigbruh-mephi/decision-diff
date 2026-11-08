@@ -3,9 +3,9 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, CardHeader, ErrorBox, Field, Filter, Skeleton, inputCls, titleCls } from "../components/ui";
 import { api, type Config, type Dataset, type Procedure, type Run, type Selection } from "../lib/api";
-import { KIND, n, plural } from "../lib/format";
-import { ParamsEditor, type Params } from "../components/ParamsEditor";
-import { missing, mine, stepCount } from "./Configs";
+import { n, plural } from "../lib/format";
+import type { Params } from "../components/ParamsEditor";
+import { demo, missing, mine, stepCount } from "./Configs";
 
 const STEPS: { kind: "parser" | "normalize" | "compare" | "segments" | "lineage" | "whatif" | "ai_prompt"; title: string; hint: string; empty?: string }[] = [
   { kind: "parser", title: "Разбор формата", hint: "Свой разборщик входных файлов (новый протокол или тип данных); исполняется в песочнице", empty: "встроенный: JSON, XML, YAML, CSV и другие (автоопределение)" },
@@ -101,16 +101,8 @@ export function NewRunPage() {
   const [setup, setSetup] = useState(false);
 
   useEffect(() => {
-    if (!sel && procs.data)
-      setSel({
-        normalize: byKind.normalize?.[0]?.id ?? "",
-        compare: byKind.compare?.[0]?.id ?? "",
-        segments: byKind.segments?.[0]?.id ?? "",
-        lineage: byKind.lineage?.[0]?.id ?? null,
-        steps: [],
-        checks: (byKind.check ?? []).filter((p) => !p.overridden).map((p) => p.id),
-      });
-  }, [procs.data, byKind, sel]);
+    if (!sel && procs.data) setSel(demo(procs.data));
+  }, [procs.data, sel]);
   useEffect(() => {
     if (!dataset && datasets.data?.length) setDataset(datasets.data[0].path);
   }, [datasets.data, dataset]);
@@ -250,21 +242,6 @@ export function NewRunPage() {
             </p>
           )}
           <div className="flex flex-wrap items-end gap-4">
-            <Field label="Заявок в выборке">
-              <input
-                title="Случайные заявки: одно и то же число дает те же заявки, поэтому прогоны можно сравнивать"
-                type="number"
-                min={1}
-                max={ds?.before}
-                className={inputCls + " w-40"}
-                value={sample}
-                onChange={(e) => {
-                  setSample(e.target.value);
-                  if (e.target.value) setIncremental(false);
-                }}
-                placeholder={ds && !two ? `все (${n(ds.before)})` : "все"}
-              />
-            </Field>
             <Field label="Название прогона">
               <input className={inputCls + " w-64"} value={name} onChange={(e) => setName(e.target.value)} placeholder={two ? before : dataset} />
             </Field>
@@ -309,26 +286,6 @@ export function NewRunPage() {
                 <Badge>{p.origin === "file" ? (p.overridden ? "заменен моей версией" : "файл") : "моя версия"}</Badge>
               </label>
             ))}
-          </div>
-        </Card>
-      )}
-      {sel && setup && (
-        <Card>
-          <CardHeader title="Параметры процедур" hint="JSON поверх параметров, объявленных в коде; раскройте процедуру, чтобы изменить" />
-          <div className="grid grid-cols-1 gap-1.5 p-4">
-            {chosen.map((id) => {
-              const p = procs.data?.find((x) => x.id === id);
-              return p ? (
-                <ParamsEditor
-                  key={id + configId}
-                  id={id}
-                  name={`${p.name} · ${KIND[p.kind] ?? p.kind}`}
-                  value={params[id]}
-                  onChange={(v) => setParams((cur) => { const next = { ...cur }; if (v) next[id] = v; else delete next[id]; return next; })}
-                  onValid={(ok) => setInvalid((cur) => (ok ? cur.filter((x) => x !== id) : [...new Set([...cur, id])]))}
-                />
-              ) : null;
-            })}
           </div>
         </Card>
       )}

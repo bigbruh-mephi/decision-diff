@@ -52,6 +52,9 @@ class RunReport:
         self.clusters = [{"cid": r["cid"], "paths": list(r["paths"]), "signature": r.get("signature"),
                           "apps": BitMap.deserialize(r["APPS"])}
                          for r in (dict(zip([d[0] for d in cur.description], t)) for t in cur.fetchall())]
+        self.structure = [dict(zip(("path_id", "PATH", "PREFIX", "apps_new", "apps_lost", "apps_type_changed",
+                                    "apps_before", "apps_after"), r)) for r in q.execute(
+            "SELECT * FROM structure ORDER BY apps_new + apps_lost DESC").fetchall()]
         self.transitions = {}
         for pid, vb, va, apps in q.execute("SELECT path_id, VALUE_BEFORE, VALUE_AFTER, APPS FROM transitions").fetchall():
             self.transitions.setdefault(pid, []).append((vb, va, BitMap.deserialize(apps)))

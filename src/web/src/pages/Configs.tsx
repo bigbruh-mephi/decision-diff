@@ -34,7 +34,7 @@ export function mine(procs: Procedure[], id: string) {
   return (p?.overridden && procs.find((x) => x.origin === "workspace" && x.kind === p.kind && x.cid === p.cid)?.id) || id;
 }
 
-function demo(procs: Procedure[]): Selection {
+export function demo(procs: Procedure[]): Selection {
   const file = (kind: string) => procs.filter((p) => p.kind === kind && p.origin === "file").map((p) => mine(procs, p.id));
   return {
     parser: null, normalize: file("normalize")[0], compare: file("compare")[0], segments: file("segments")[0],

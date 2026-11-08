@@ -77,10 +77,11 @@ export type Cluster = {
   causes?: Cause[];
 };
 export type Cause = { key: string; label: string; hint?: string | null; apps: number };
+export type Structure = { path_id: number; PATH: string; PREFIX: string; apps_new: number; apps_lost: number; apps_type_changed: number; apps_before: number; apps_after: number };
 export type Summary = {
   decision_field: string; apps: number; changed: number; decision_changed: number; changed_same_decision: number; unchanged: number;
   approval_before: number | null; approval_after: number | null; input_driven: number; swap: Swap[];
-  run: { id: string; name: string; stats: RunStats }; clusters: Cluster[];
+  run: { id: string; name: string; stats: RunStats }; clusters: Cluster[]; structure: Structure[];
   issues?: { kind: string; apps: number; rows: number; examples: string[] }[]; labels?: Partial<import("./format").Labels>; causes_fidelity?: number | null;
 };
 export type Attribute = { path_id: number; PATH: string; PREFIX: string; KEY: string; apps: number; decision_changed: number; input: boolean; by_type: Record<string, number>; transitions: Transition[] };

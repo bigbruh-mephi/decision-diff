@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton, Stat, cx, linkCls } from "../../components/ui";
-import { api, scopeQuery, type Cause, type CheckResult, type Cluster, type Scope, type SegmentField, type Summary } from "../../lib/api";
+import { api, scopeQuery, type Cause, type CheckResult, type Cluster, type Scope, type SegmentField, type Structure, type Summary } from "../../lib/api";
 import { LABELS, n, objects, ofObjects, pct, plural, rate, tail, type Labels } from "../../lib/format";
 import { useScopeNav } from "../Run";
 import { AiOpinion } from "./AiOpinion";
@@ -228,6 +228,29 @@ function SameDecision({ s, l, onAll, onCluster }: { s: Summary; l: Labels; onAll
   );
 }
 
+function StructureCard({ rows, l, onOpen }: { rows: Structure[]; l: Labels; onOpen: (path: string, type: "ATTRIBUTE_NEW" | "ATTRIBUTE_LOST") => void }) {
+  const [all, setAll] = useState(false);
+  if (!rows.length) return null;
+  return (
+    <Card>
+      <CardHeader title="Состав атрибутов изменился" hint={`Атрибуты, которые появились или исчезли: например, новые предикторы модели - сигнал «модель перекатали». Считается по всему прогону; число открывает ${l.object[2]}`} />
+      <ul className="divide-y divide-line">
+        {(all ? rows : rows.slice(0, 6)).map((x) => (
+          <li key={x.path_id} className="flex items-baseline justify-between gap-4 px-5 py-2 text-[13px]">
+            <span className="min-w-0 truncate font-mono text-xs" title={x.PATH}>{tail(x.PATH)}</span>
+            <span className="flex shrink-0 gap-3">
+              {x.apps_new > 0 && <button className={cx("num text-ct-new", linkCls)} title="атрибут появился" onClick={() => onOpen(x.PATH, "ATTRIBUTE_NEW")}>+{n(x.apps_new)}</button>}
+              {x.apps_lost > 0 && <button className={cx("num text-ct-lost", linkCls)} title="атрибут исчез" onClick={() => onOpen(x.PATH, "ATTRIBUTE_LOST")}>−{n(x.apps_lost)}</button>}
+              {x.apps_type_changed > 0 && <span className="num text-muted" title="сменился тип значения">тип {n(x.apps_type_changed)}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {rows.length > 6 && <ShowAll all={all} total={rows.length} onToggle={() => setAll(!all)} />}
+    </Card>
+  );
+}
+
 export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
   const q = scopeQuery(scope);
   const go = useScopeNav(runId);
@@ -297,6 +320,11 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
         <SameDecision s={s} l={l} onAll={() => go({ ...scope, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} onCluster={(c) => go({ ...scope, cluster: c.cid!, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} />
         )}
       </div>
+      <StructureCard
+        rows={s.structure ?? []}
+        l={l}
+        onOpen={(path, type) => go(scope, "apps", { cell: { PATH: path, CHANGE_TYPE: type }, title: `${tail(path)}: ${type === "ATTRIBUTE_NEW" ? "атрибут появился" : "атрибут исчез"}` })}
+      />
       <AiOpinion runId={runId} />
     </div>
   );
