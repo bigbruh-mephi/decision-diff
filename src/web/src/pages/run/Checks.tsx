@@ -2,8 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Filter, Mono, Skeleton, cx, linkCls } from "../../components/ui";
 import { api, type CheckResult, type CheckRow } from "../../lib/api";
-import { ms, n, plural } from "../../lib/format";
-import { useScopeNav } from "../Run";
+import { cap, manyName, ms, n, plural } from "../../lib/format";
+import { useLabels, useScopeNav } from "../Run";
 
 function verdict(r: CheckRow) {
   if (r.RESULT === "PASS") return { tone: "pass" as const, label: "PASS", row: "" };
@@ -13,6 +13,7 @@ function verdict(r: CheckRow) {
 
 export function ChecksView({ runId }: { runId: string }) {
   const go = useScopeNav(runId);
+  const l = useLabels(runId);
   const checks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`) });
   const [filter, setFilter] = useState<"all" | "fail" | "pass">("all");
   const rows = useMemo(() => {
@@ -26,12 +27,12 @@ export function ChecksView({ runId }: { runId: string }) {
   return (
     <div className="flex flex-col gap-4">
       {errors.map((c) => (
-        <ErrorBox key={c.check_id + c.check_sha} inline title={`Проверка «${c.label}» не выполнилась.`} error={c.error} debug={c.error_debug} />
+        <ErrorBox key={c.check_id + c.check_sha} inline title={`Проверка "${c.label}" не выполнилась.`} error={c.error} debug={c.error_debug} />
       ))}
       <Card>
         <CardHeader
-          title={`Отчёт автопроверок · ${plural(rows.length, "строка", "строки", "строк")} из ${plural((checks.data ?? []).length, "проверки", "проверок", "проверок")}`}
-          hint="Строки всех проверок в одной таблице. Бледные строки — мало срабатываний, уверенности в поломке нет"
+          title={`Отчет автопроверок · ${plural(rows.length, "строка", "строки", "строк")} из ${plural((checks.data ?? []).length, "проверки", "проверок", "проверок")}`}
+          hint="Строки всех проверок в одной таблице. Бледные строки - мало срабатываний, уверенности в поломке нет"
           actions={
             <Filter value={filter} onChange={setFilter} items={[{ id: "all", label: "все" }, { id: "fail", label: "FAIL" }, { id: "pass", label: "PASS" }]} />
           }
@@ -49,7 +50,7 @@ export function ChecksView({ runId }: { runId: string }) {
                   <th className="px-2 py-2 text-right font-medium">Числа</th>
                   <th className="px-2 py-2 text-right font-medium">Метрика</th>
                   <th className="px-2 py-2 font-medium">Результат</th>
-                  <th className="px-4 py-2 text-right font-medium">Заявки</th>
+                  <th className="px-4 py-2 text-right font-medium">{cap(manyName(l))}</th>
                 </tr>
               </thead>
               <tbody>

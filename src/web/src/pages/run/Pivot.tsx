@@ -3,8 +3,8 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Badge, Button, Card, CardHeader, ChangeGlyph, ErrorBox, Filter, Skeleton, cx, inputCls, linkCls } from "../../components/ui";
 import { api, type Fields, type Pivot, type PivotLayout, type PivotTemplate, type Scope } from "../../lib/api";
-import { n, pct, plural } from "../../lib/format";
-import { useScopeNav, type RunSearch } from "../Run";
+import { n, objects, pct, plural } from "../../lib/format";
+import { useLabels, useScopeNav, type RunSearch } from "../Run";
 
 type Mode = NonNullable<PivotLayout["mode"]>;
 type Zone = "rows" | "cols" | "filters";
@@ -86,6 +86,7 @@ function Popover({ onClose, children, className }: { onClose: () => void; childr
 
 export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
   const go = useScopeNav(runId);
+  const lb = useLabels(runId);
   const nav = useNavigate();
   const qc = useQueryClient();
   const search = useSearch({ strict: false }) as RunSearch;
@@ -216,7 +217,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
   };
   const num = (v: number | undefined, r: string[], c: string[], base?: number, strong?: boolean) =>
     v ? (
-      <button onClick={() => openCell(r, c)} title={`${plural(v, "заявка", "заявки", "заявок")}: ${describe(r, c)}. Клик откроет список`} className={cx(linkCls, strong && "font-semibold")}>
+      <button onClick={() => openCell(r, c)} title={`${objects(v, lb)}: ${describe(r, c)}. Клик откроет список`} className={cx(linkCls, strong && "font-semibold")}>
         {n(v)}
         {mode !== "count" && base ? <span className="ml-1 text-[11px] text-muted">{pct(v, base)}</span> : null}
       </button>
@@ -416,7 +417,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
         <Card>
           <CardHeader
             title="Сводная таблица"
-            hint="В ячейке - число различных заявок, а не сумма строк. Итого строки или колонки считает каждую заявку один раз, поэтому оно может быть меньше суммы ячеек. Наведите на число, чтобы увидеть, что откроется по клику."
+            hint={`В ячейке - число различных ${lb.object[2]}, а не сумма строк. Итого строки или колонки считается без повторов, поэтому оно может быть меньше суммы ячеек. Наведите на число, чтобы увидеть, что откроется по клику.`}
             actions={
               <>
                 <Filter value={mode} onChange={(m) => setLayout({ ...layout, mode: m })} items={MODES} />
@@ -454,7 +455,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                         {c.length ? c.map((x, i) => <Fragment key={i}>{i > 0 && " · "}<Header d={table.colDims[i]} k={x} /></Fragment>) : "заявок"}
                       </th>
                     ))}
-                    {table.cols.length > 1 && <th className="border-b border-l border-line-strong px-2 py-1.5 text-right text-xs font-semibold" title="Различные заявки строки по всем колонкам: каждая заявка один раз">Итого</th>}
+                    {table.cols.length > 1 && <th className="border-b border-l border-line-strong px-2 py-1.5 text-right text-xs font-semibold" title="Итого строки по всем колонкам, без повторов">Итого</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -487,7 +488,7 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                 {table.rows.length > 1 && table.colTotal && (
                   <tfoot className="sticky bottom-0 bg-surface">
                     <tr>
-                      <td colSpan={table.rowDims.length || 1} className="sticky left-0 border-t border-line-strong bg-surface px-2 py-1.5 text-xs font-semibold" title="Различные заявки колонки по всем строкам: каждая заявка один раз">Итого</td>
+                      <td colSpan={table.rowDims.length || 1} className="sticky left-0 border-t border-line-strong bg-surface px-2 py-1.5 text-xs font-semibold" title="Итого колонки по всем строкам, без повторов">Итого</td>
                       {table.cols.map((c) => (
                         <td key={c.join()} className="num border-l border-t border-line-strong px-2 py-1 text-right">
                           {num(table.colTotal!.get(c.join("\u0000")), [], c, mode === "total" || mode === "row" ? table.total : undefined, true)}

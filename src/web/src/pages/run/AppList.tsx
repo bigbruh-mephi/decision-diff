@@ -4,13 +4,15 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton } from "../../components/ui";
 import { api, type AppRow, type Scope } from "../../lib/api";
-import { n } from "../../lib/format";
-import type { Drill } from "../Run";
+import { cap, manyName, n } from "../../lib/format";
+import { useLabels, type Drill } from "../Run";
 
 const PAGE = 500;
 
 export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; drill?: Drill }) {
   const [pages, setPages] = useState(1);
+  const l = useLabels(runId);
+  const many = cap(manyName(l));
   useEffect(() => setPages(1), [scope, drill]);
   const q = useQuery({
     queryKey: ["apps", runId, scope, drill, pages],
@@ -25,18 +27,18 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
   return (
     <Card>
       <CardHeader
-        title={`${q.data ? `Заявки: ${n(q.data.total)}` : "Заявки"}${drill?.title ? ` · ${drill.title}` : ""}`}
-        hint={drill?.title ? `Отбор: ${drill.title}` : "Все заявки текущего среза; клик открывает заявку с BEFORE/AFTER по каждому атрибуту"}
+        title={`${q.data ? `${many}: ${n(q.data.total)}` : many}${drill?.title ? ` · ${drill.title}` : ""}`}
+        hint={drill?.title ? `Отбор: ${drill.title}` : `Все ${manyName(l)} текущего среза; клик открывает BEFORE/AFTER по каждому атрибуту`}
       />
       {q.isLoading && <Skeleton rows={8} />}
       {q.error && <ErrorBox error={q.error} />}
-      {q.data && !rows.length && <Empty title="Нет заявок в этом отборе" />}
+      {q.data && !rows.length && <Empty title={`Нет ${l.object[2]} в этом отборе`} />}
       {rows.length > 0 && (
         <>
           <div className="overflow-x-auto">
           <div className="min-w-[640px]">
           <div className="grid grid-cols-[1fr_7rem_7rem_8rem_6rem] border-b border-line px-4 py-2 text-xs font-medium text-muted">
-            <span>Заявка</span>
+            <span>{cap(l.object[0])}</span>
             <span>BEFORE</span>
             <span>AFTER</span>
             <span>Изменения</span>
@@ -58,7 +60,7 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
                     <span className="font-mono text-xs underline decoration-line-strong underline-offset-2">{a.app_id}</span>
                     <span className="text-xs">{a.decision_before ?? "—"}</span>
                     <span className={a.decision_changed ? "text-xs font-semibold text-fail" : "text-xs"}>{a.decision_after ?? "—"}</span>
-                    <span>{a.decision_changed ? <Badge tone="fail">смена решения</Badge> : a.changed ? <Badge>есть различия</Badge> : <span className="text-xs text-muted">без изменений</span>}</span>
+                    <span>{a.decision_changed ? <Badge tone="fail">сменилось {l.outcome}</Badge> : a.changed ? <Badge>есть различия</Badge> : <span className="text-xs text-muted">без изменений</span>}</span>
                     <span className="num text-right text-xs text-muted">{a.cluster ? `№${a.cluster}` : "—"}</span>
                   </Link>
                 );
@@ -69,7 +71,7 @@ export function AppList({ runId, scope, drill }: { runId: string; scope: Scope; 
           </div>
           {q.data && q.data.total > rows.length && (
             <button className="w-full border-t border-line py-2 text-xs text-accent hover:bg-surface-2" onClick={() => setPages(pages + 1)} disabled={rows.length >= 1000}>
-              {rows.length >= 1000 ? `показаны первые ${n(rows.length)} из ${n(q.data.total)} — сузьте срез` : `показать ещё (${n(rows.length)} из ${n(q.data.total)})`}
+              {rows.length >= 1000 ? `показаны первые ${n(rows.length)} из ${n(q.data.total)} - сузьте срез` : `показать еще (${n(rows.length)} из ${n(q.data.total)})`}
             </button>
           )}
         </>

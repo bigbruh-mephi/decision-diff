@@ -2,7 +2,9 @@
 
 The strategy re-derived from the datamart: a product trial approves when no enabled rule hit and the target score
 passes the cut-off (``pd >= cut``); an application approves when any trial approves. Cut-offs shift for all
-products or per product (the trial's ``product_name``); the report breaks the result down by ``by_segment``. Calibration: with default
+products or per product (the trial's ``product_name``); stop factors and the target model are not user params (only the
+cut-off is configurable), the cause attribution still restores them internally. The report breaks the result down by
+``by_segment``. Calibration: with default
 params the procedure must reproduce the slice's own decision for every application (the app reports fidelity).
 
 The target score is the trial's ``pd.modelName`` model read from ``scoreModels`` (``pd`` when that model has no
@@ -19,14 +21,14 @@ def evaluate(data, params):
     cut = data["cut"] + params["cutoff_shift"]
     for product, shift in params["product_shift"].items():
         cut[data["product"] == product] += shift
-    target = np.full(len(cut), params["target_model"]) if params["target_model"] else data["target"]
+    target = np.full(len(cut), params["target_model"]) if params.get("target_model") else data["target"]
     pd = np.array(data["pd"])
     for model, score in data["models"].items():
         pick = (target == model) & ~np.isnan(score)
         pd[pick] = score[pick]
     hit = np.zeros(len(cut), bool)
     for rule, fired in data["hit"].items():
-        if rule not in params["rules_off"]:
+        if rule not in params.get("rules_off", ()):
             hit |= fired
     ok = ~hit & (pd >= cut)
     approve = np.bincount(data["unit_app"], weights=ok, minlength=data["n_apps"]) > 0
@@ -35,7 +37,7 @@ def evaluate(data, params):
 
 PROCEDURE = {
     "id": "spr_whatif_cutoff_rules",
-    "label": "СПР: что если поменять пороги, стоп-факторы и целевую модель",
+    "label": "СПР: что если сдвинуть пороги отсечения",
     "description": "Упрощенная модель решения: по ней система ищет причину каждой смены решения (порог, модель, правила или входные данные).",
     "kind": "whatif",
     "unit_depth": 1,
@@ -55,8 +57,6 @@ PROCEDURE = {
                          "label": "Сдвиг всех порогов"},
         "product_shift": {"type": "float_map", "keys_from": "product", "min": -0.3, "max": 0.3, "step": 0.01,
                           "default": {}, "label": "Сдвиг порога по продукту"},
-        "rules_off": {"type": "multi", "values_from": "hit", "default": [], "label": "Отключённые стоп-факторы"},
-        "target_model": {"type": "enum", "values_from": "models", "default": "", "label": "Целевая модель скоринга"},
     },
     "factors": {
         "cutoff": {"label": "порог", "inputs": ["cut", "cut_name"],

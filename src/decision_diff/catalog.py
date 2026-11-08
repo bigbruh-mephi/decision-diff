@@ -88,11 +88,12 @@ async def save_workspace(c, owner_id, code, proc_id=None):
     return row and row["id"]
 
 
-async def snapshot(c, selection, params=None, owner_id=None):
+async def snapshot(c, selection, params=None, owner_id=None, partial=False):
     """Freeze ``{"normalize": id, "compare": id, "segments": id, "checks": [ids]}`` (optional ``lineage``, ``parser``,
     ``ai_prompt``, ``whatif``, ordered ``steps``) into code shas for a run; the AI prompts are validated here, before the run starts.
 
-    Only placed files and the owner's own workspace procedures can be selected. ``whatif`` (attribution of decision
+    Only placed files and the owner's own workspace procedures can be selected; ``partial`` (a configuration draft)
+    skips required stages that are not chosen yet. ``whatif`` (attribution of decision
     flips at finalize) defaults to the procedure the what-if tab opens with: the most recently updated one.
     """
     params = params or {}
@@ -106,7 +107,13 @@ async def snapshot(c, selection, params=None, owner_id=None):
                                             "из списка заново")
         return {"sha": row["sha"], "params": params.get(str(pid), {})}
 
-    snap = {k: await one(selection[k], k) for k in ("normalize", "compare", "segments")}
+    snap = {}
+    for k in ("normalize", "compare", "segments"):
+        if selection.get(k):
+            snap[k] = await one(selection[k], k)
+        elif not partial:
+            raise procedures.ProcedureError(f"в конфигурации не выбран обязательный этап {k!r}: добавьте процедуру "
+                                            "на странице конфигурации")
     for kind in ("lineage", "parser", "ai_prompt"):
         if selection.get(kind):
             snap[kind] = await one(selection[kind], kind)

@@ -74,11 +74,11 @@ export const EVENT: Record<string, string> = {
 };
 
 /** One readable line for a run event; the error (already in Russian from the API) wins over raw fields. */
-export const eventText = (type: string, d: Record<string, unknown>) => {
+export const eventText = (type: string, d: Record<string, unknown>, l: Labels = LABELS) => {
   if (d.error) return `${d.check_id ? `${d.check_id}: ` : d.chunk_no != null ? `№${d.chunk_no}: ` : ""}${d.error}`;
-  if (type === "chunk.done") return `№${d.chunk_no} · ${plural(Number(d.apps), "заявка", "заявки", "заявок")} · с различиями ${n(Number(d.changed_apps))}`;
-  if (type === "ingest.done") return `${plural(Number(d.chunks), "порция", "порции", "порций")} · ${plural(Number(d.apps), "заявка", "заявки", "заявок")}`;
-  if (type === "run.done") return `${plural(Number(d.apps), "заявка", "заявки", "заявок")} · с различиями ${n(Number(d.changed_apps))}`;
+  if (type === "chunk.done") return `№${d.chunk_no} · ${objects(Number(d.apps), l)} · с различиями ${n(Number(d.changed_apps))}`;
+  if (type === "ingest.done") return `${plural(Number(d.chunks), "порция", "порции", "порций")} · ${objects(Number(d.apps), l)}`;
+  if (type === "run.done") return `${objects(Number(d.apps), l)} · с различиями ${n(Number(d.changed_apps))}`;
   if (type === "finalize.started") return plural(Number(d.chunks), "порция", "порции", "порций");
   if (type === "check.done") return `${d.check_id ?? ""}: без ошибок`;
   return "";
@@ -90,6 +90,9 @@ export const tail = (path: string, k = 3) => {
 };
 
 export type Labels = { object: string[]; outcome: string; positive: string; positive_rate: string };
-export const LABELS: Labels = { object: ["объект", "объекта", "объектов"], outcome: "исход", positive: "положительный исход", positive_rate: "доля положительного исхода" };
+/** ``object`` forms: one, few, many, nominative plural (optional, ``manyName`` falls back to the few form). */
+export const LABELS: Labels = { object: ["объект", "объекта", "объектов", "объекты"], outcome: "исход", positive: "положительный исход", positive_rate: "доля положительного исхода" };
 export const objects = (x: number, l: Labels) => plural(x, l.object[0], l.object[1], l.object[2]);
 export const ofObjects = (x: number, l: Labels) => plural(x, l.object[1], l.object[2], l.object[2]);
+export const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+export const manyName = (l: Labels) => l.object[3] ?? l.object[1];

@@ -14,6 +14,7 @@ import "./styles.css";
 import { Button, ErrorBox, Logo, Skeleton } from "./components/ui";
 import { ApiError, api, type Me } from "./lib/api";
 import { AppDetailPage } from "./pages/AppDetail";
+import { ConfigEditorPage, ConfigsPage } from "./pages/Configs";
 import { LoginPage } from "./pages/Login";
 import { NewRunPage } from "./pages/NewRun";
 import { RunPage, type RunSearch } from "./pages/Run";
@@ -57,6 +58,9 @@ function Shell() {
               <Link to="/" className="rounded-md px-3 py-1.5 text-muted hover:text-accent [&.active]:bg-surface-2 [&.active]:text-fg" activeOptions={{ exact: true }}>
                 Прогоны
               </Link>
+              <Link to="/configs" className="rounded-md px-3 py-1.5 text-muted hover:text-accent [&.active]:bg-surface-2 [&.active]:text-fg">
+                Конфигурации
+              </Link>
               <Link to="/workspace" className="rounded-md px-3 py-1.5 text-muted hover:text-accent [&.active]:bg-surface-2 [&.active]:text-fg">
                 Рабочая область
               </Link>
@@ -91,7 +95,10 @@ function Shell() {
 
 const root = createRootRoute({ component: Shell });
 const runsRoute = createRoute({ getParentRoute: () => root, path: "/", component: RunsPage });
-const newRunRoute = createRoute({ getParentRoute: () => root, path: "/runs/new", component: NewRunPage });
+const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+const newRunRoute = createRoute({ getParentRoute: () => root, path: "/runs/new", validateSearch: (s: Record<string, unknown>): { config?: string } => ({ config: str(s.config) }), component: NewRunPage });
+const configsRoute = createRoute({ getParentRoute: () => root, path: "/configs", component: ConfigsPage });
+const configRoute = createRoute({ getParentRoute: () => root, path: "/configs/$configId", validateSearch: (s: Record<string, unknown>): { add?: string } => ({ add: str(s.add) }), component: ConfigEditorPage });
 const runRoute = createRoute({
   getParentRoute: () => root,
   path: "/runs/$runId",
@@ -138,12 +145,12 @@ const appRoute = createRoute({
 const workspaceRoute = createRoute({
   getParentRoute: () => root,
   path: "/workspace",
-  validateSearch: (s: Record<string, unknown>): { run?: string; proc?: string } => ({ run: typeof s.run === "string" ? s.run : undefined, proc: typeof s.proc === "string" ? s.proc : undefined }),
+  validateSearch: (s: Record<string, unknown>): { run?: string; proc?: string; kind?: string; config?: string } => ({ run: str(s.run), proc: str(s.proc), kind: str(s.kind), config: str(s.config) }),
   component: WorkspacePage,
 });
 
 export const router = createRouter({
-  routeTree: root.addChildren([runsRoute, newRunRoute, runRoute, clusterRoute, appsRoute, appRoute, workspaceRoute]),
+  routeTree: root.addChildren([runsRoute, newRunRoute, configsRoute, configRoute, runRoute, clusterRoute, appsRoute, appRoute, workspaceRoute]),
   defaultPreload: "intent",
 });
 export { appRoute, runRoute, workspaceRoute };

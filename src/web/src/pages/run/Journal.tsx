@@ -3,7 +3,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { CodeView } from "../../components/CodeView";
 import { Badge, Button, Card, CardHeader, ErrorBox, Skeleton } from "../../components/ui";
 import { api, type Journal } from "../../lib/api";
-import { CHUNK_STATE, EVENT, KIND, dt, eventText, ms, n, plural } from "../../lib/format";
+import { CHUNK_STATE, EVENT, KIND, dt, eventText, ms, n, objects, plural, type Labels } from "../../lib/format";
 
 const STAGE: Record<string, string> = {
   parse: "Разбор ответов (формат → дерево)",
@@ -38,7 +38,7 @@ function CodeModal({ sha, onClose }: { sha: string; onClose: () => void }) {
   );
 }
 
-export function JournalView({ runId, live }: { runId: string; live: unknown[] }) {
+export function JournalView({ runId, live, l }: { runId: string; live: unknown[]; l: Labels }) {
   const [tick, setTick] = useState(live.length);
   const latest = useRef(live.length);
   latest.current = live.length;
@@ -102,7 +102,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
           </table>
         </div>
       </Card>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid items-start gap-4 lg:grid-cols-2">
         <Card>
           <details>
           <summary className="cursor-pointer select-none px-5 py-3 text-[13px] font-semibold">Порции · {chunks.length}{chunks.some((c) => c.state === "failed") && <Badge tone="fail">есть ошибки</Badge>} <span className="text-xs font-normal text-muted">технические детали обработки</span></summary>
@@ -114,7 +114,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
                   <tr className="border-b border-line">
                     <td className="num px-4 py-1">№{c.chunk_no}</td>
                     <td className="px-2 py-1"><Badge tone={c.state === "done" ? "pass" : c.state === "failed" ? "fail" : "accent"}>{CHUNK_STATE[c.state] ?? c.state}</Badge></td>
-                    <td className="num px-2 py-1">{plural(c.apps, "заявка", "заявки", "заявок")}</td>
+                    <td className="num px-2 py-1">{objects(c.apps, l)}</td>
                     <td className="num px-2 py-1">{c.attempts > 1 ? <Badge tone="warn">{plural(c.attempts, "попытка", "попытки", "попыток")}</Badge> : plural(c.attempts, "попытка", "попытки", "попыток")}</td>
                     <td className="px-2 py-1 text-muted">{c.worker}</td>
                     <td className="num px-4 py-1 text-right text-muted">{c.started_at && c.finished_at ? ms(new Date(c.finished_at).getTime() - new Date(c.started_at).getTime()) : "…"}</td>
@@ -134,7 +134,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
               <li key={e.id} className="flex gap-2 border-b border-line px-4 py-1">
                 <span className="shrink-0 whitespace-nowrap text-muted">{dt(e.ts)}</span>
                 <span className="shrink-0 text-muted" title={e.type}>{EVENT[e.type] ?? e.type}</span>
-                <span className="truncate text-muted" title={eventText(e.type, e.data)}>{eventText(e.type, e.data)}</span>
+                <span className="truncate text-muted" title={eventText(e.type, e.data, l)}>{eventText(e.type, e.data, l)}</span>
               </li>
             ))}
           </ul>

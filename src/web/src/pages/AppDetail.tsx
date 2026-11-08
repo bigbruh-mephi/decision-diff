@@ -3,13 +3,15 @@ import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Badge, Card, CardHeader, ChangeGlyph, ErrorBox, Mono, Skeleton, cx, inputCls, titleCls } from "../components/ui";
 import { api, type AppDetail, type Summary } from "../lib/api";
-import { n, plural } from "../lib/format";
+import { cap, manyName, n, plural } from "../lib/format";
+import { useLabels } from "./Run";
 
 export function AppDetailPage() {
   const { runId, appId } = useParams({ strict: false }) as { runId: string; appId: string };
   const { path, scope } = useSearch({ strict: false }) as { path?: string; scope?: string };
   const app = useQuery({ queryKey: ["app", runId, appId], queryFn: () => api.get<AppDetail>(`/api/runs/${runId}/apps/${encodeURIComponent(appId)}`) });
   const summary = useQuery({ queryKey: ["summary", runId, ""], queryFn: () => api.get<Summary>(`/api/runs/${runId}/summary`) });
+  const l = useLabels(runId);
   const [showSame, setShowSame] = useState(true);
   const [view, setView] = useState<"doc" | "table">("doc");
   const [q, setQ] = useState(path ?? "");
@@ -35,7 +37,7 @@ export function AppDetailPage() {
     <div className="flex flex-col gap-4">
       <div>
         <Link to="/runs/$runId" params={{ runId }} search={{ tab: "apps", scope }} className="text-xs text-accent hover:underline">
-          ← к списку заявок
+          ← {cap(manyName(l))}
         </Link>
         <h1 className={cx(titleCls, "mt-1 flex flex-wrap items-center gap-3")}>
           <span className="font-mono">{a.app_id}</span>
@@ -48,7 +50,7 @@ export function AppDetailPage() {
         </h1>
         <p className="num text-xs text-muted">{plural(a.rows.length, "атрибут", "атрибута", "атрибутов")} · изменилось {n(changed)} · без изменений {n(same)}</p>
       </div>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Card>
           <CardHeader
             title="BEFORE / AFTER"
@@ -106,7 +108,7 @@ export function AppDetailPage() {
         </Card>
         <div className="flex flex-col gap-4">
           <Card>
-            <CardHeader title={`Проверки с этой заявкой · ${a.checks.length}`} />
+            <CardHeader title={`Проверки · ${a.checks.length}`} />
             <ul className="divide-y divide-line">
               {a.checks.map((c, i) => (
                 <li key={i} className="px-4 py-2 text-xs">
@@ -117,11 +119,11 @@ export function AppDetailPage() {
                   <Mono className="text-muted">{c.row.ARGUMENT}</Mono>
                 </li>
               ))}
-              {!a.checks.length && <li className="px-4 py-3 text-xs text-muted">Заявка не попала ни в одну строку проверок</li>}
+              {!a.checks.length && <li className="px-4 py-3 text-xs text-muted">Не попадает ни в одну строку проверок</li>}
             </ul>
           </Card>
           <Card>
-            <CardHeader title="Разрезы заявки" />
+            <CardHeader title="Разрезы" />
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 p-4 text-xs">
               {segs.map(([k, v]) => (
                 <div key={k} className="contents">

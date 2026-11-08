@@ -187,3 +187,11 @@ def test_describe_reads_description_or_docstring_without_running_code():
     assert procedures.describe('"""Первый абзац.\n\nВторой."""\nimport os\nos.exit(1)\n'
                                'PROCEDURE = {"id": "x", "label": "x", "kind": "compare"}') == ("x", "Первый абзац.")
     assert procedures.describe("x = 1") == (None, "")
+
+
+def test_pairs_from_two_separate_folders(tmp_path):
+    b, a = tmp_path / "one", tmp_path / "two"
+    b.mkdir(), a.mkdir()
+    (b / "1.json").write_text("{}"), (b / "2.json").write_text("{}"), (a / "2.json").write_text("{}")
+    assert [(k, x and x.parent.name, y and y.parent.name) for k, x, y in ingest.pairs(b, a)] == [
+        ("1", "one", None), ("2", "one", "two")]

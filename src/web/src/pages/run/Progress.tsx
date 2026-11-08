@@ -1,6 +1,6 @@
 import { Card, CardHeader } from "../../components/ui";
 import type { Run } from "../../lib/api";
-import { EVENT, STATE, eventText, n, pct, plural } from "../../lib/format";
+import { EVENT, LABELS, STATE, eventText, n, ofObjects, pct } from "../../lib/format";
 
 const STEPS: { state: Run["state"][]; label: string }[] = [
   { state: ["receiving"], label: "Приём и нарезка порций" },
@@ -42,7 +42,7 @@ export function Progress({ run, live }: { run: Run; live: { type: string; data: 
           <div>
             <div className="mb-1 flex justify-between text-xs text-muted">
               <span>Порции: {done?.n ?? 0} из {run.total_chunks ?? (total || "…")}</span>
-              <span className="num">{n(processed)} из {plural(run.apps, "заявки", "заявок", "заявок")}</span>
+              <span className="num">{n(processed)} из {ofObjects(run.apps, LABELS)}</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuenow={processed} aria-valuemax={run.apps}>
               <div className="h-full bg-accent transition-all" style={{ width: `${run.apps ? (processed / run.apps) * 100 : 0}%` }} />
@@ -50,7 +50,7 @@ export function Progress({ run, live }: { run: Run; live: { type: string; data: 
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded-md bg-surface-2 px-3 py-2">
-              <div className="text-xs text-muted">Обработано заявок</div>
+              <div className="text-xs text-muted">Обработано {LABELS.object[2]}</div>
               <div className="num text-lg font-semibold">{n(processed)}</div>
             </div>
             <div className="rounded-md bg-surface-2 px-3 py-2">

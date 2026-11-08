@@ -60,3 +60,30 @@ def test_bad_file_is_skipped_vanished_file_is_removed_and_resync_only_on_change(
     os.utime(tmp_path / "a.py", ns=(1, 1))
     asyncio.run(catalog.sync_changed(c, tmp_path))
     assert c.procs["a.py"]["sha"] != old
+
+
+class KindConn:
+    """``procedures`` rows by id for ``catalog.snapshot``."""
+
+    def __init__(self, kinds):
+        self.kinds = kinds
+
+    async def execute(self, sql, args=()):
+        if "SELECT sha, kind FROM procedures" in sql:
+            kind = self.kinds.get(args[0])
+            return _Cur(kind and {"sha": "s-" + args[0], "kind": kind})
+        return _Cur(None)
+
+
+def test_config_draft_validation_skips_missing_stages_but_rejects_wrong_procedures():
+    import pytest
+
+    from decision_diff.engine.procedures import ProcedureError
+
+    c = KindConn({"s1": "step", "c1": "check", "n1": "normalize"})
+    snap = asyncio.run(catalog.snapshot(c, {"steps": ["s1"], "checks": ["c1"]}, {}, "u", partial=True))
+    assert [x["sha"] for x in snap["steps"]] == ["s-s1"] and "normalize" not in snap
+    with pytest.raises(ProcedureError, match="обязательный"):
+        asyncio.run(catalog.snapshot(c, {"steps": ["s1"], "checks": []}, {}, "u"))
+    with pytest.raises(ProcedureError, match="step"):
+        asyncio.run(catalog.snapshot(c, {"steps": ["n1"], "checks": []}, {}, "u", partial=True))

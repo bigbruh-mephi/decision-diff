@@ -31,11 +31,11 @@ function problems(params: Record<string, Param>, values: Record<string, unknown>
     if (p.type === "float" && !(isNum(v) && v >= p.min! && v <= p.max!)) out[k] = `Значение вне диапазона: ${range}`;
     if (p.type === "float_map")
       for (const [key, x] of Object.entries((v as Record<string, unknown>) ?? {})) {
-        if (allowed && !allowed.includes(key)) out[`${k}.${key}`] = `Неизвестное имя «${key}»`;
+        if (allowed && !allowed.includes(key)) out[`${k}.${key}`] = `Неизвестное имя "${key}"`;
         else if (!(isNum(x) && x >= p.min! && x <= p.max!)) out[`${k}.${key}`] = `${key}: значение ${isNum(x) ? n(x) : String(x)} вне диапазона, ${range}`;
       }
     const bad = p.type === "multi" ? ((v as string[]) ?? []).find((x) => allowed && !allowed.includes(x)) : p.type === "enum" && allowed && v !== p.default && !allowed.includes(String(v)) ? String(v) : undefined;
-    if (bad !== undefined) out[k] = `Значения «${bad}» нет среди допустимых`;
+    if (bad !== undefined) out[k] = `Значения "${bad}" нет среди допустимых`;
   }
   return out;
 }
@@ -135,7 +135,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
 
   if (decl.isLoading) return <Skeleton rows={8} />;
   if (decl.error && !(decl.error instanceof ApiError && decl.error.code === "whatif_missing")) return <ErrorBox error={decl.error} />;
-  if (decl.error) return <Card><Empty title="Процедура «что если» не найдена">Добавьте процедуру вида whatif в procedures/ или в рабочей области.</Empty></Card>;
+  if (decl.error) return <Card><Empty title={'Процедура "что если" не найдена'}>Добавьте процедуру вида whatif в procedures/ или в рабочей области.</Empty></Card>;
   const d = decl.data!;
   const r = res?.result;
   const stale = !!r && (!!err || invalid);
@@ -156,10 +156,10 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
       </Card>
       <div className="flex min-w-0 flex-col gap-4">
         {invalid && <ErrorBox inline title="Расчет не запущен." error={`Исправьте выделенные поля: ${plural(Object.keys(bad).length, "ошибка", "ошибки", "ошибок")}. ${Object.values(bad)[0]}.`} />}
-        {err && <ErrorBox inline title="Расчет «что если» не выполнился." error={err.error} debug={err.debug} />}
+        {err && <ErrorBox inline title={'Расчет "что если" не выполнился.'} error={err.error} debug={err.debug} />}
         {stale && <p role="status" className="rounded-md border border-warn/50 bg-warn-bg px-3 py-2 text-xs text-warn">Ниже - результат для прошлых параметров, он устарел. После исправления расчет запустится сам.</p>}
         <div className={cx("flex min-w-0 flex-col gap-4", stale && "pointer-events-none select-none opacity-40")} aria-hidden={stale}>
-        <p className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-muted">Приближение: моделирует только порог и стоп-факторы. Точный результат - изменить стратегию, перепрогнать через СПР и сравнить прогоны здесь.</p>
+        <p className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-muted">Приближение: пересчитывается только порог отсечения, стоп-факторы и скоринговые модели остаются как в срезе. Точный результат - изменить стратегию, перепрогнать через СПР и сравнить прогоны здесь.</p>
         {r && (
           <Card>
             <CardHeader title={r.by_segment ? `${l.positive_rate[0].toUpperCase() + l.positive_rate.slice(1)} по ${r.by_segment}` : "По сегментам"} hint={`Сейчас - как в срезе ${r.slice}; клик по числу сменивших ${l.outcome} открывает их список`} />
@@ -175,7 +175,7 @@ export function WhatIf({ runId, scope }: { runId: string; scope: Scope }) {
                       <td className="num px-2 py-1.5 text-right">{rate(x.approval_slice)}</td>
                       <td className="num px-2 py-1.5 text-right font-medium">{rate(x.approval_whatif)}</td>
                       <td className={cx("num px-2 py-1.5 text-right", d > 0 ? "text-pass" : d < 0 ? "text-fail" : "text-muted")}>{d ? `${d > 0 ? "+" : "-"}${Math.abs(d).toFixed(1).replace(".", ",")} п.п.` : "0"}</td>
-                      <td className="num px-4 py-1.5 text-right">{x.moved && r.moved_ids?.length ? <button className="text-accent hover:underline" onClick={() => go({ ...scope, seg: { ...scope.seg, [x.field]: [x.value] }, apps: r.moved_ids }, "apps", { title: `${x.value}: ${l.outcome} изменится в сценарии «что если»` })}>{n(x.moved)}</button> : n(x.moved)}</td>
+                      <td className="num px-4 py-1.5 text-right">{x.moved && r.moved_ids?.length ? <button className="text-accent hover:underline" onClick={() => go({ ...scope, seg: { ...scope.seg, [x.field]: [x.value] }, apps: r.moved_ids }, "apps", { title: `${x.value}: ${l.outcome} изменится в сценарии "что если"` })}>{n(x.moved)}</button> : n(x.moved)}</td>
                     </tr>
                   );
                 })}

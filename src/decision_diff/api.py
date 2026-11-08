@@ -196,7 +196,8 @@ def _dataset_info(path):
     base = settings.data_dir if path.is_relative_to(settings.data_dir / "uploads") else settings.datasets_dir
     return {"path": str(path.relative_to(base)), "run_id": man.get("run_id", path.name),
             "applications": man.get("applications"), "before": len(os.listdir(b)),
-            "after": len(os.listdir(a)), "excluded": man.get("technical_fields_always_differ", [])}
+            "after": len(os.listdir(a)), "excluded": man.get("technical_fields_always_differ", []),
+            "slices": [str(x.resolve().relative_to(base.resolve())) for x in (b, a)]}
 
 
 def _visible(rel, s):
@@ -402,9 +403,9 @@ async def code_version(sha: str, s=Depends(user)):
 
 
 class Selection(BaseModel):
-    normalize: uuid.UUID
-    compare: uuid.UUID
-    segments: uuid.UUID
+    normalize: uuid.UUID | None = None
+    compare: uuid.UUID | None = None
+    segments: uuid.UUID | None = None
     lineage: uuid.UUID | None = None
     whatif: uuid.UUID | None = None
     parser: uuid.UUID | None = None
@@ -428,9 +429,18 @@ async def list_configs(s=Depends(user)):
     return j(rows)
 
 
+async def _check_config(c, body, s):
+    """Validate the chosen procedures at setup time; a draft may still lack required stages."""
+    try:
+        await catalog.snapshot(c, body.procedures.model_dump(mode="json"), body.params, s["user_id"], partial=True)
+    except procedures.ProcedureError as e:
+        raise errors.Problem(422, "procedure_invalid", str(e), "procedures") from e
+
+
 @app.post("/api/configs")
 async def create_config(body: ConfigBody, s=Depends(user)):
     async with pool().connection() as c:
+        await _check_config(c, body, s)
         row = await (await c.execute("""
             INSERT INTO run_configs (owner_id, name, dataset, procedure_ids, params) VALUES (%s, %s, %s, %s, %s)
             RETURNING *""", (s["user_id"], body.name, body.dataset, Jsonb(body.procedures.model_dump(mode="json")),
@@ -441,6 +451,7 @@ async def create_config(body: ConfigBody, s=Depends(user)):
 @app.put("/api/configs/{cid}")
 async def update_config(cid: uuid.UUID, body: ConfigBody, s=Depends(user)):
     async with pool().connection() as c:
+        await _check_config(c, body, s)
         row = await (await c.execute("""
             UPDATE run_configs SET name = %s, dataset = %s, procedure_ids = %s, params = %s, updated_at = now()
             WHERE id = %s AND owner_id = %s RETURNING *""",
@@ -462,6 +473,7 @@ async def delete_config(cid: uuid.UUID, s=Depends(user)):
 class RunBody(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     dataset: str | None = None
+    dataset_after: str | None = None
     config_id: uuid.UUID | None = None
     procedures: Selection | None = None
     params: dict = {}
@@ -488,9 +500,13 @@ async def create_run(body: RunBody, s=Depends(user)):
         sample = params.get("sample_apps")
         if sample is not None and (type(sample) is not int or sample < 1):
             raise errors.Problem(422, "bad_sample", "Размер выборки должен быть положительным целым числом.", "sample_apps")
+        if body.dataset_after and not body.seal:
+            raise errors.Problem(422, "two_folders_with_batches", "Два отдельных датасета нельзя совмещать с догрузкой "
+                                                                 "порций.", "dataset_after")
         if sample and not body.seal:
             raise errors.Problem(422, "sample_with_batches", "Выборку нельзя совмещать с догрузкой порций.", "sample_apps")
         source = _resolve_dataset(dataset, s)
+        after = body.dataset_after and str(_resolve_dataset(body.dataset_after, s))
         try:
             snap = await catalog.snapshot(c, sel.model_dump(mode="json"), params, s["user_id"])
         except procedures.ProcedureError as e:
@@ -503,7 +519,7 @@ async def create_run(body: RunBody, s=Depends(user)):
                         (s["user_id"], str(run_id)))
     await queue.publish(STATE["ch"], queue.WORK, {"kind": "ingest", "run_id": str(run_id),
                                                   "user_id": str(s["user_id"]), "source": str(source),
-                                                  "seal": body.seal, "sample": sample})
+                                                  "after": after, "seal": body.seal, "sample": sample})
     return await get_run(run_id, s)
 
 

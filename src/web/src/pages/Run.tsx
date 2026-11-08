@@ -2,9 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Badge, Button, ErrorBox, Skeleton, Tabs, inputCls, titleCls } from "../components/ui";
-import { api, type Dataset, type Run, type Scope, type Summary } from "../lib/api";
+import { api, type CheckResult, type Config, type Dataset, type Run, type Scope, type Summary } from "../lib/api";
 import { useRunEvents } from "../lib/events";
-import { LABELS, objects, plural, type Labels } from "../lib/format";
+import { LABELS, cap, manyName, objects, type Labels } from "../lib/format";
 import { StateBadge } from "./Runs";
 import { AppList } from "./run/AppList";
 import { ChecksView } from "./run/Checks";
@@ -55,7 +55,7 @@ export function parseDrill(raw?: string): Drill | undefined {
   }
 }
 
-function ScopeBar({ runId, name, scope }: { runId: string; name: string; scope: Scope }) {
+function ScopeBar({ runId, name, scope, l }: { runId: string; name: string; scope: Scope; l: Labels }) {
   const go = useScopeNav(runId);
   const chips: { label: string; drop: () => void }[] = [];
   for (const [f, vals] of Object.entries(scope.seg ?? {}))
@@ -68,8 +68,8 @@ function ScopeBar({ runId, name, scope }: { runId: string; name: string; scope: 
       },
     });
   if (scope.cluster) chips.push({ label: `кластер №${scope.cluster}`, drop: () => go({ ...scope, cluster: undefined }) });
-  if (scope.apps) chips.push({ label: plural(scope.apps.length, "выбранная заявка", "выбранные заявки", "выбранных заявок"), drop: () => go({ ...scope, apps: undefined }) });
-  if (scope.check) chips.push({ label: `${plural(scope.check.cnt, "заявка", "заявки", "заявок")} строки проверки`, drop: () => go({ ...scope, check: undefined }) });
+  if (scope.apps) chips.push({ label: `выбрано: ${objects(scope.apps.length, l)}`, drop: () => go({ ...scope, apps: undefined }) });
+  if (scope.check) chips.push({ label: `${objects(scope.check.cnt, l)} строки проверки`, drop: () => go({ ...scope, check: undefined }) });
   if (scope.cause) chips.push({ label: `причина смены решения: ${scope.cause.label}`, drop: () => go({ ...scope, cause: undefined }) });
   if (!chips.length) return null;
   return (
@@ -128,10 +128,14 @@ export function RunPage() {
       if (type === "check.done") qc.invalidateQueries({ queryKey: ["checks", runId] });
     }
   });
+  const configs = useQuery({ queryKey: ["configs"], queryFn: () => api.get<Config[]>("/api/configs"), enabled: !!run.data?.config_id, retry: false });
   const share = useMutation({ mutationFn: () => api.post<{ url: string }>(`/api/runs/${runId}/share`) });
   const cancel = useMutation({ mutationFn: () => api.post(`/api/runs/${runId}/cancel`), onSuccess: () => run.refetch() });
   const labels = useLabels(runId, run.data?.state === "done");
+  const checks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`), enabled: run.data?.state === "done" });
+  const fails = (checks.data ?? []).flatMap((c) => c.rows).filter((x) => x.RESULT === "FAIL" && x.CONFIDENCE === "HIGH").length;
 
+  const cfg = configs.data?.find((c) => c.id === run.data?.config_id);
   if (run.isLoading) return <Skeleton rows={8} />;
   if (run.error || !run.data) return <ErrorBox error={run.error} />;
   const r = run.data;
@@ -145,6 +149,7 @@ export function RunPage() {
         <Link to="/" className="text-xs text-muted hover:text-fg">Прогоны /</Link>
         <h1 className={titleCls}>{r.name}</h1>
         <StateBadge state={r.state} />
+        {cfg && <Link to="/configs/$configId" params={{ configId: cfg.id }} search={{}} className="text-xs text-muted hover:text-accent">конфигурация "{cfg.name}"</Link>}
         <p className="num text-xs text-muted">
           {objects(r.apps, labels)}
         </p>
@@ -166,8 +171,8 @@ export function RunPage() {
           onChange={setTab}
           items={[
             { id: "overview", label: "Обзор" },
-            { id: "apps", label: "Заявки" },
-            { id: "checks", label: "Автопроверки" },
+            { id: "checks", label: <>Автопроверки{fails > 0 && <> <Badge tone="fail">FAIL {fails}</Badge></>}</> },
+            { id: "apps", label: cap(manyName(labels)) },
             { id: "pivot", label: "Сводная таблица", quiet: true },
             { id: "whatif", label: "Что если", quiet: true },
             { id: "journal", label: "Журнал этапов", quiet: true },
@@ -186,8 +191,8 @@ export function RunPage() {
           )}
         </div>
       </div>
-      {done && tab !== "journal" && <ScopeBar runId={runId} name={r.name} scope={scope} />}
-      {tab === "journal" && <JournalView runId={runId} live={live} />}
+      {done && tab !== "journal" && <ScopeBar runId={runId} name={r.name} scope={scope} l={labels} />}
+      {tab === "journal" && <JournalView runId={runId} live={live} l={labels} />}
       {tab !== "journal" && !done && <Progress run={r} live={live} />}
       {done && tab === "overview" && <Overview runId={runId} scope={scope} />}
       {done && tab === "pivot" && <PivotView runId={runId} scope={scope} />}

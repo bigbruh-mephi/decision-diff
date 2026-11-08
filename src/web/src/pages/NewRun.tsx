@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Badge, Button, Card, CardHeader, ErrorBox, Field, Skeleton, inputCls, titleCls } from "../components/ui";
+import { Badge, Button, Card, CardHeader, ErrorBox, Field, Filter, Skeleton, inputCls, titleCls } from "../components/ui";
 import { api, type Config, type Dataset, type Procedure, type Run, type Selection } from "../lib/api";
-import { KIND, dt, n, plural } from "../lib/format";
+import { KIND, n, plural } from "../lib/format";
+import { ParamsEditor, type Params } from "../components/ParamsEditor";
+import { missing, mine, stepCount } from "./Configs";
 
 const STEPS: { kind: "parser" | "normalize" | "compare" | "segments" | "lineage" | "whatif" | "ai_prompt"; title: string; hint: string; empty?: string }[] = [
   { kind: "parser", title: "Разбор формата", hint: "Свой разборщик входных файлов (новый протокол или тип данных); исполняется в песочнице", empty: "встроенный: JSON, XML, YAML, CSV и другие (автоопределение)" },
@@ -73,63 +75,10 @@ function StepList({ items, value, onChange }: { items: Procedure[]; value: strin
   );
 }
 
-type Params = Record<string, Record<string, unknown>>;
-
-function ParamsEditor({ id, name, value, onChange, onValid }: { id: string; name: string; value: Record<string, unknown> | undefined; onChange: (v: Record<string, unknown> | undefined) => void; onValid: (ok: boolean) => void }) {
-  const proc = useQuery({ queryKey: ["procedure", id], queryFn: () => api.get<Procedure>(`/api/procedures/${id}`) });
-  const declared = proc.data?.params ?? {};
-  const [text, setText] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const changed = Object.keys(value ?? {});
-  const edit = (t: string) => {
-    setText(t);
-    try {
-      const v = JSON.parse(t);
-      if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("нужен объект {\"параметр\": значение}");
-      const diff = Object.fromEntries(Object.entries(v).filter(([k, x]) => JSON.stringify(x) !== JSON.stringify(declared[k])));
-      setError(null);
-      onValid(true);
-      onChange(Object.keys(diff).length ? diff : undefined);
-    } catch (e) {
-      setError(e instanceof SyntaxError ? `Неверный JSON: ${e.message}` : e instanceof Error ? e.message : String(e));
-      onValid(false);
-    }
-  };
-  return (
-    <details className="rounded border border-line px-3 py-1.5">
-      <summary className="flex cursor-pointer items-center gap-2 text-[13px]">
-        <span className="min-w-0 flex-1 truncate">{name}</span>
-        {error ? <Badge tone="fail">ошибка JSON</Badge> : changed.length ? <Badge tone="accent">изменено: {changed.join(", ")}</Badge> : <Badge>по умолчанию</Badge>}
-      </summary>
-      {proc.isLoading && <Skeleton rows={2} />}
-      {proc.error && <ErrorBox inline error={proc.error} />}
-      {proc.data && (
-        <div className="flex flex-col gap-1 py-2">
-          <textarea
-            className={inputCls + " h-auto min-h-24 py-1.5 font-mono text-xs"}
-            rows={Math.min(14, JSON.stringify({ ...declared, ...value }, null, 2).split("\n").length)}
-            spellCheck={false}
-            value={text ?? JSON.stringify({ ...declared, ...value }, null, 2)}
-            onChange={(e) => edit(e.target.value)}
-            aria-label={`Параметры: ${name}`}
-          />
-          {error ? (
-            <span className="text-xs text-fail">{error}</span>
-          ) : (
-            <span className="text-xs text-muted">
-              Действующие значения: объявленные в коде процедуры, поверх них ваши изменения. Сохраняются в конфигурации и прогоне.
-              {changed.length > 0 && <button className="ml-2 text-accent hover:underline" onClick={() => { setText(null); onChange(undefined); }}>сбросить</button>}
-            </span>
-          )}
-        </div>
-      )}
-    </details>
-  );
-}
-
 export function NewRunPage() {
   const nav = useNavigate();
   const qc = useQueryClient();
+  const { config } = useSearch({ strict: false }) as { config?: string };
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: () => api.get<Dataset[]>("/api/datasets") });
   const procs = useQuery({ queryKey: ["procedures"], queryFn: () => api.get<Procedure[]>("/api/procedures") });
   const configs = useQuery({ queryKey: ["configs"], queryFn: () => api.get<Config[]>("/api/configs") });
@@ -139,6 +88,9 @@ export function NewRunPage() {
     return m;
   }, [procs.data]);
   const [dataset, setDataset] = useState("");
+  const [two, setTwo] = useState(false);
+  const [before, setBefore] = useState("");
+  const [after, setAfter] = useState("");
   const [name, setName] = useState("");
   const [sel, setSel] = useState<Selection | null>(null);
   const [configId, setConfigId] = useState<string>("");
@@ -146,7 +98,7 @@ export function NewRunPage() {
   const [sample, setSample] = useState("");
   const [params, setParams] = useState<Params>({});
   const [invalid, setInvalid] = useState<string[]>([]);
-  const [setup, setSetup] = useState(true);
+  const [setup, setSetup] = useState(false);
 
   useEffect(() => {
     if (!sel && procs.data)
@@ -162,17 +114,17 @@ export function NewRunPage() {
   useEffect(() => {
     if (!dataset && datasets.data?.length) setDataset(datasets.data[0].path);
   }, [datasets.data, dataset]);
+  useEffect(() => {
+    if (!configId && procs.data && configs.data?.length) applyConfig(config ?? configs.data[0].id);
+  }, [procs.data, configs.data, config]);
 
   const applyConfig = (id: string) => {
     setConfigId(id);
     const c = configs.data?.find((x) => x.id === id);
     if (c) {
-      const mine = (id: string | null | undefined) => {
-        const p = procs.data?.find((x) => x.id === id);
-        return (p?.overridden && procs.data?.find((x) => x.origin === "workspace" && x.kind === p.kind && x.cid === p.cid)?.id) || id;
-      };
+      const m = <T extends string | null | undefined>(x: T) => (x ? mine(procs.data ?? [], x) : x);
       const ids = c.procedure_ids;
-      setSel({ ...ids, normalize: mine(ids.normalize)!, compare: mine(ids.compare)!, segments: mine(ids.segments)!, lineage: mine(ids.lineage), whatif: mine(ids.whatif), parser: mine(ids.parser), ai_prompt: mine(ids.ai_prompt), steps: (ids.steps ?? []).map((x) => mine(x)!), checks: [...new Set(ids.checks.map((x) => mine(x)!))] });
+      setSel({ ...ids, normalize: m(ids.normalize), compare: m(ids.compare), segments: m(ids.segments), lineage: m(ids.lineage), whatif: m(ids.whatif), parser: m(ids.parser), ai_prompt: m(ids.ai_prompt), steps: (ids.steps ?? []).map(m), checks: [...new Set(ids.checks.map(m))] });
       if (c.dataset) setDataset(c.dataset);
       setName(c.name);
       setSample(c.params?.sample_apps ? String(c.params.sample_apps) : "");
@@ -210,15 +162,8 @@ export function NewRunPage() {
       qc.invalidateQueries({ queryKey: ["configs"] });
     },
   });
-  const removeConfig = useMutation({
-    mutationFn: (id: string) => api.del(`/api/configs/${id}`),
-    onSuccess: (_, id) => {
-      if (configId === id) setConfigId("");
-      qc.invalidateQueries({ queryKey: ["configs"] });
-    },
-  });
   const start = useMutation({
-    mutationFn: () => api.post<Run>("/api/runs", { name: name || undefined, dataset, procedures: sel, params: runParams, config_id: configId || undefined, seal: !incremental }),
+    mutationFn: () => api.post<Run>("/api/runs", { name: name || undefined, dataset: two ? before : dataset, dataset_after: two ? after : undefined, procedures: sel, params: runParams, config_id: configId || undefined, seal: !incremental }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["runs"] });
       nav({ to: "/runs/$runId", params: { runId: r.id }, search: {} });
@@ -228,66 +173,52 @@ export function NewRunPage() {
   if (procs.isLoading || datasets.isLoading) return <Skeleton rows={8} />;
   if (procs.error || datasets.error) return <ErrorBox title="Не удалось загрузить процедуры и датасеты." error={procs.error ?? datasets.error} />;
   const ds = datasets.data?.find((d) => d.path === dataset);
+  const slices = (datasets.data ?? []).flatMap((d) => d.slices ?? []);
+  const cfg = configs.data?.find((c) => c.id === configId);
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-4">
       <div>
         <h1 className={titleCls}>Новый прогон</h1>
-        <p className="text-xs text-muted">Выберите датасет, процедуры приведения и сравнения и набор автопроверок. Конфигурацию можно сохранить и запускать повторно.</p>
+        <p className="mt-1 text-xs text-muted">Выберите, что сравнивать, и конфигурацию с готовыми шагами и автопроверками. Остается нажать "Запустить".</p>
       </div>
-      {configs.data && configs.data.length > 0 && (
-        <Card>
-          <CardHeader title="Сохранённые конфигурации" hint="Последние изменённые сверху" />
-          <ul className="max-h-60 divide-y divide-line overflow-y-auto">
-            {configs.data.map((c) => (
-              <li key={c.id} className="flex items-center gap-2 px-4 py-1.5">
-                <Button size="sm" variant={configId === c.id ? "primary" : "secondary"} onClick={() => applyConfig(c.id)}>
-                  {c.name}
-                </Button>
-                <span className="min-w-0 flex-1 truncate text-xs text-muted">
-                  {dt(c.updated_at)} · {c.dataset ?? "без датасета"} · {plural(c.procedure_ids.checks.length, "проверка", "проверки", "проверок")}
-                  {Object.keys(c.params ?? {}).length > 0 && " · свои параметры"}
-                </span>
-                <Button size="sm" variant="ghost" aria-label={`Удалить конфигурацию ${c.name}`} disabled={removeConfig.isPending} onClick={() => confirm(`Удалить конфигурацию «${c.name}»? Прогоны останутся.`) && removeConfig.mutate(c.id)}>
-                  Удалить
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
       <Card>
-        <CardHeader title="1. Датасет" hint="Результат модулей 1–2: два среза ответов СПР по одним и тем же заявкам" />
-        <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-[1fr_auto]">
-          <Field label="Прогон модуля 2">
-            <select className={inputCls} value={dataset} onChange={(e) => setDataset(e.target.value)}>
-              {(datasets.data ?? []).map((d) => (
-                <option key={d.path} value={d.path}>
-                  {d.path} · {n(d.before)} / {plural(d.after, "ответ", "ответа", "ответов")}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="или загрузить архив">
-            <label className="inline-flex h-9 cursor-pointer items-center rounded-md border border-dashed border-line-strong px-3 text-[13px] text-muted hover:border-accent hover:text-fg">
-              {upload.isPending ? "Загрузка…" : "Выбрать .zip"}
-              <input type="file" accept=".zip" className="sr-only" onChange={(e) => e.target.files?.[0] && upload.mutate(e.target.files[0])} />
-            </label>
-          </Field>
-          <Field label="Заявок в выборке" hint="Случайные заявки. Одно и то же число даёт те же заявки, поэтому прогоны можно сравнивать между собой">
-            <input
-              type="number"
-              min={1}
-              max={ds?.before}
-              className={inputCls + " w-40"}
-              value={sample}
-              onChange={(e) => {
-                setSample(e.target.value);
-                if (e.target.value) setIncremental(false);
-              }}
-              placeholder={ds ? `все (${n(ds.before)})` : "все"}
-            />
-          </Field>
-          {ds && (
+        <CardHeader title="1. Данные" hint="Результат модулей 1-2: ответы СПР по одним и тем же заявкам до и после изменения. Файлы сопоставляются по имени" actions={<Filter value={two ? "two" : "one"} onChange={(v) => { setTwo(v === "two"); if (v === "two") setIncremental(false); }} items={[{ id: "one", label: "Папка прогона" }, { id: "two", label: "Два датасета" }]} />} />
+        <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+          {two ? (
+            <>
+              <Field label="Датасет 1 (BEFORE)">
+                <select className={inputCls} value={before} onChange={(e) => setBefore(e.target.value)}>
+                  <option value="">выберите папку…</option>
+                  {slices.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </Field>
+              <Field label="Датасет 2 (AFTER)">
+                <select className={inputCls} value={after} onChange={(e) => setAfter(e.target.value)}>
+                  <option value="">выберите папку…</option>
+                  {slices.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </Field>
+            </>
+          ) : (
+            <Field label="Прогон модуля 2 (папка с BEFORE и AFTER)">
+              <select className={inputCls} value={dataset} onChange={(e) => setDataset(e.target.value)}>
+                {(datasets.data ?? []).map((d) => (
+                  <option key={d.path} value={d.path}>
+                    {d.path} · {n(d.before)} / {plural(d.after, "ответ", "ответа", "ответов")}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          {!two && (
+            <Field label="или загрузить архив">
+              <label className="inline-flex h-9 cursor-pointer items-center rounded-md border border-dashed border-line-strong px-3 text-[13px] text-muted hover:border-accent hover:text-fg">
+                {upload.isPending ? "Загрузка…" : "Выбрать .zip"}
+                <input type="file" accept=".zip" className="sr-only" onChange={(e) => e.target.files?.[0] && upload.mutate(e.target.files[0])} />
+              </label>
+            </Field>
+          )}
+          {ds && !two && (
             <p className="text-xs text-muted sm:col-span-2">
               BEFORE: {n(ds.before)} · AFTER: {n(ds.after)}
               {ds.excluded.length > 0 && <> · технические поля из manifest: {ds.excluded.map((x) => <Badge key={x}>{x}</Badge>)}</>}
@@ -296,9 +227,54 @@ export function NewRunPage() {
           {upload.error && <ErrorBox error={upload.error} />}
         </div>
       </Card>
+      <Card>
+        <CardHeader title="2. Конфигурация" actions={<Link to="/configs" className="text-xs text-accent hover:underline">Все конфигурации</Link>} />
+        <div className="flex flex-col gap-3 p-5">
+          {configs.data?.length ? (
+            <div className="flex items-center gap-3">
+              <select className={inputCls + " flex-1"} value={configId} onChange={(e) => (e.target.value ? applyConfig(e.target.value) : (setConfigId(""), setSetup(true)))} aria-label="Конфигурация">
+                {configs.data.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                <option value="">без конфигурации - выбрать процедуры вручную</option>
+              </select>
+              {cfg && <Link to="/configs/$configId" params={{ configId: cfg.id }} search={{}} className="text-xs text-accent hover:underline">открыть</Link>}
+            </div>
+          ) : (
+            <p className="text-[13px] text-muted">
+              Конфигураций пока нет. <Link to="/configs" className="text-accent hover:underline">Создайте конфигурацию</Link> или выберите процедуры вручную ниже.
+            </p>
+          )}
+          {cfg && sel && (
+            <p className="text-xs text-muted">
+              {plural(stepCount(sel), "шаг", "шага", "шагов")}, из них {plural(sel.checks.length, "автопроверка", "автопроверки", "автопроверок")}
+              {missing(sel).length > 0 && <span className="text-warn"> · не выбрано: {missing(sel).join(", ")}</span>}
+            </p>
+          )}
+          <div className="flex flex-wrap items-end gap-4">
+            <Field label="Заявок в выборке">
+              <input
+                title="Случайные заявки: одно и то же число дает те же заявки, поэтому прогоны можно сравнивать"
+                type="number"
+                min={1}
+                max={ds?.before}
+                className={inputCls + " w-40"}
+                value={sample}
+                onChange={(e) => {
+                  setSample(e.target.value);
+                  if (e.target.value) setIncremental(false);
+                }}
+                placeholder={ds && !two ? `все (${n(ds.before)})` : "все"}
+              />
+            </Field>
+            <Field label="Название прогона">
+              <input className={inputCls + " w-64"} value={name} onChange={(e) => setName(e.target.value)} placeholder={two ? before : dataset} />
+            </Field>
+            <Button className="ml-auto" variant="ghost" onClick={() => setSetup(!setup)} aria-expanded={setup}>{setup ? "Скрыть настройки" : "Настроить"}</Button>
+          </div>
+        </div>
+      </Card>
       {sel && setup && (
         <Card>
-          <CardHeader title="2. Процедуры" hint="📄 файл, размещённый в системе · ✎ код из рабочей области. Обработчик меняется без изменения кода приложения." />
+          <CardHeader title="Процедуры" hint="📄 файл, размещённый в системе · ✎ код из рабочей области. Обработчик меняется без изменения кода приложения." />
           <div className="grid grid-cols-1 gap-3 p-4">
             {STEPS.map((st) => (
               <Fragment key={st.kind}>
@@ -314,7 +290,7 @@ export function NewRunPage() {
       {sel && setup && (
         <Card>
           <CardHeader
-            title={`3. Автопроверки (${sel.checks.length} из ${(byKind.check ?? []).length})`}
+            title={`Автопроверки (${sel.checks.length} из ${(byKind.check ?? []).length})`}
             actions={
               <Link to="/workspace" className="text-xs text-accent hover:underline">
                 Написать проверку
@@ -338,7 +314,7 @@ export function NewRunPage() {
       )}
       {sel && setup && (
         <Card>
-          <CardHeader title="4. Параметры процедур" hint="JSON поверх параметров, объявленных в коде; раскройте процедуру, чтобы изменить" />
+          <CardHeader title="Параметры процедур" hint="JSON поверх параметров, объявленных в коде; раскройте процедуру, чтобы изменить" />
           <div className="grid grid-cols-1 gap-1.5 p-4">
             {chosen.map((id) => {
               const p = procs.data?.find((x) => x.id === id);
@@ -356,37 +332,26 @@ export function NewRunPage() {
           </div>
         </Card>
       )}
-      {sel && !setup && (
-        <Card>
-          <div className="flex items-center gap-3 px-4 py-3 text-[13px]">
-            <span className="min-w-0 flex-1 text-muted">
-              Шаги, процедуры и автопроверки заданы конфигурацией: {plural(sel.steps?.length ?? 0, "шаг подготовки", "шага подготовки", "шагов подготовки")}, {plural(sel.checks.length, "проверка", "проверки", "проверок")}
-            </span>
-            <Button size="sm" onClick={() => setSetup(true)}>Настроить</Button>
-          </div>
-        </Card>
-      )}
-      <Card>
-        <div className="flex flex-wrap items-end gap-3 p-4">
-          <Field label="Название прогона">
-            <input className={inputCls + " w-72"} value={name} onChange={(e) => setName(e.target.value)} placeholder={dataset} />
-          </Field>
-          <label className="flex h-9 items-center gap-2 text-xs text-muted" title="Прогон остаётся открытым: можно догружать новые порции ответов, обработка начинается сразу">
+      <div className="flex flex-wrap items-center gap-3">
+        {!two && (
+          <label className="flex items-center gap-2 text-xs text-muted" title="Прогон остается открытым: можно догружать новые порции ответов, обработка начинается сразу">
             <input type="checkbox" checked={incremental} disabled={!!sample} onChange={(e) => setIncremental(e.target.checked)} />
             принимать догрузку порций
           </label>
-          <div className="ml-auto flex gap-2">
+        )}
+        <div className="ml-auto flex gap-2">
+          {setup && (
             <Button onClick={() => saveConfig.mutate()} disabled={!sel || blocked || saveConfig.isPending}>
-              {configId ? "Обновить конфигурацию" : "Сохранить конфигурацию"}
+              {configId ? "Обновить конфигурацию" : "Сохранить как конфигурацию"}
             </Button>
-            <Button variant="primary" onClick={() => start.mutate()} disabled={!sel || !dataset || blocked || start.isPending}>
-              {start.isPending ? "Отправка…" : "Запустить"}
-            </Button>
-          </div>
+          )}
+          <Button variant="primary" className="h-11 px-8 text-[15px]" onClick={() => start.mutate()} disabled={!sel || (two ? !before || !after : !dataset) || blocked || start.isPending}>
+            {start.isPending ? "Отправка…" : "Запустить ▶"}
+          </Button>
         </div>
-        {blocked && <p className="px-4 pb-3 text-xs text-fail">Исправьте JSON параметров, чтобы сохранить или запустить</p>}
-        {(start.error || saveConfig.error || removeConfig.error) && <ErrorBox error={start.error ?? saveConfig.error ?? removeConfig.error} />}
-      </Card>
+      </div>
+      {blocked && <p className="text-xs text-fail">Исправьте JSON параметров, чтобы сохранить или запустить</p>}
+      {(start.error || saveConfig.error) && <ErrorBox error={start.error ?? saveConfig.error} />}
     </div>
   );
 }

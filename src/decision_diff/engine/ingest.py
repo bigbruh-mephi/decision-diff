@@ -48,9 +48,10 @@ def slice_dirs(run_dir):
     return found["BEFORE"], found["AFTER"]
 
 
-def pairs(run_dir):
-    """Sorted ``(app_id, before_path | None, after_path | None)`` of a run folder, paired by file stem."""
-    b, a = slice_dirs(run_dir)
+def pairs(run_dir, after_dir=None):
+    """Sorted ``(app_id, before_path | None, after_path | None)`` paired by file stem: the two slices of a run folder,
+    or ``run_dir`` as the BEFORE folder and ``after_dir`` as the AFTER folder when given."""
+    b, a = (Path(run_dir), Path(after_dir)) if after_dir else slice_dirs(run_dir)
     fb = {p.stem: p for p in b.iterdir() if p.is_file()}
     fa = {p.stem: p for p in a.iterdir() if p.is_file()}
     return [(k, fb.get(k), fa.get(k)) for k in sorted(fb.keys() | fa.keys())]

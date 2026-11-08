@@ -52,14 +52,14 @@ const STAGE_ORDER = ["parser", "step", "normalize", "compare", "segments", "line
 const STAGE_TITLE: Record<string, string> = { parser: "1. Разбор формата", step: "2. Подготовка документов", normalize: "3. Приведение", compare: "4. Сравнение", segments: "5. Разрезы отчета", lineage: "6. Цепочка этапов", whatif: "7. Модель решения", facts: "Факты отчета", check: "8. Автопроверки", ai_prompt: "9. Мнение ИИ" };
 
 export function WorkspacePage() {
-  const { run: runParam, proc } = useSearch({ strict: false }) as { run?: string; proc?: string };
+  const { run: runParam, proc, kind, config } = useSearch({ strict: false }) as { run?: string; proc?: string; kind?: string; config?: string };
   const nav = useNavigate();
   const qc = useQueryClient();
   const procs = useQuery({ queryKey: ["procedures"], queryFn: () => api.get<Procedure[]>("/api/procedures") });
   const runs = useQuery({ queryKey: ["runs"], queryFn: () => api.get<Run[]>("/api/runs") });
   const done = (runs.data ?? []).filter((r) => r.state === "done");
   const [runId, setRunId] = useState(runParam ?? "");
-  const [code, setCode] = useState(() => template("check"));
+  const [code, setCode] = useState(() => template(kind ?? "check"));
   const [current, setCurrent] = useState<Procedure | null>(null);
   const [results, setResults] = useState<Record<number, CellResult>>({});
   const [msg, setMsg] = useState<string | null>(null);
@@ -106,7 +106,8 @@ export function WorkspacePage() {
       setCurrent(p);
       setMsg(`Сохранено: ${p.name} (${KIND[p.kind] ?? p.kind}), версия ${p.sha.slice(0, 7)}. Новые прогоны используют эту версию по умолчанию`);
       qc.invalidateQueries({ queryKey: ["procedures"] });
-      nav({ to: "/workspace", search: { run: runId || undefined, proc: p.id }, replace: true });
+      if (config) nav({ to: "/configs/$configId", params: { configId: config }, search: { add: p.id } });
+      else nav({ to: "/workspace", search: { run: runId || undefined, proc: p.id }, replace: true });
     },
   });
   const addToReport = useMutation({
@@ -154,6 +155,7 @@ export function WorkspacePage() {
       <div className="flex min-w-0 flex-col gap-3">
         <Card>
           <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
+            {config && <Link to="/configs/$configId" params={{ configId: config }} search={{}} className="text-xs text-muted hover:text-fg">← К конфигурации /</Link>}
             <h1 className="text-[13px] font-semibold">{current ? current.name : "Новая процедура"}</h1>
             {current && <Badge>{current.origin === "file" ? `файл ${current.path}` : "рабочая область"}</Badge>}
             {current && <Mono className="text-muted">версия {current.sha.slice(0, 7)}</Mono>}
@@ -166,7 +168,7 @@ export function WorkspacePage() {
                 ))}
               </select>
               <Button size="sm" onClick={() => runCell(parts.length - 1)} disabled={!runId}>Выполнить всё</Button>
-              <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending} title={current?.origin === "file" ? "Файл в системе не меняется: сохраняется ваша версия, новые прогоны берут ее вместо файла" : undefined}>{current?.origin === "file" ? "Сохранить как мою версию" : "Сохранить"}</Button>
+              <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending} title={current?.origin === "file" ? "Файл в системе не меняется: сохраняется ваша версия, новые прогоны берут ее вместо файла" : undefined}>{current?.origin === "file" ? "Сохранить как мою версию" : "Сохранить"}{config ? " и вернуться" : ""}</Button>
               <Button size="sm" variant="primary" onClick={() => addToReport.mutate()} disabled={!runId || !isCheck || addToReport.isPending} title={isCheck ? undefined : "Применить к готовому прогону можно автопроверку; другие процедуры выбираются при запуске нового прогона"}>Применить к прогону</Button>
             </div>
           </div>

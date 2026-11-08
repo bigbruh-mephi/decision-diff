@@ -104,3 +104,18 @@ def test_pivot_templates_crud_and_validation(client):
     assert client.post("/api/pivot-templates", json={"name": "x", "layout": {"rows": ["A"], "cols": ["A"]}}).status_code == 422
     assert client.delete(f"/api/pivot-templates/{t['id']}").status_code == 204
     assert client.delete(f"/api/pivot-templates/{t['id']}").status_code == 404
+
+
+def test_config_save_validates_procedures_and_two_folder_dataset(client):
+    by = {}
+    for p in client.get("/api/procedures").json():
+        by.setdefault(p["kind"], []).append(p)
+    draft = client.post("/api/configs", json={"name": "draft", "procedures": {"steps": [], "checks": []}})
+    assert draft.status_code == 200, draft.text
+    bad = client.put(f"/api/configs/{draft.json()['id']}",
+                     json={"name": "draft", "procedures": {"checks": [by["normalize"][0]["id"]]}})
+    assert bad.status_code == 422 and bad.json()["code"] == "procedure_invalid"
+    ds = client.get("/api/datasets").json()[0]
+    assert client.post("/api/runs", json={"config_id": draft.json()["id"], "dataset": ds["slices"][0],
+                                          "dataset_after": "../etc"}).status_code == 400
+    client.delete(f"/api/configs/{draft.json()['id']}")

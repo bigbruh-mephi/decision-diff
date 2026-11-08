@@ -31,9 +31,10 @@ def _stage(name, sha, t0, t1, rows_in=None, rows_out=None, status="done", error=
             "rows_in": rows_in, "rows_out": rows_out, "error": error}
 
 
-def list_pairs(source, sample=None):
-    """Paired ``(app_id, before_path, after_path)`` of a run folder, optionally only a sample of ``sample`` of them."""
-    return ingest.sample(ingest.pairs(source), sample)
+def list_pairs(source, sample=None, after=None):
+    """Paired ``(app_id, before_path, after_path)`` of a run folder (or of the BEFORE folder ``source`` and the AFTER
+    folder ``after``), optionally only a sample of ``sample`` of them."""
+    return ingest.sample(ingest.pairs(source, after), sample)
 
 
 def cut_chunk(items, path):

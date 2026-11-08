@@ -12,7 +12,7 @@ const ISSUE: Record<string, string> = {
   missing_key_field: "нет поля ключа в элементе массива",
   non_object_in_keyed_array: "не объект в массиве с ключом",
   container_in_value_array: "вложенная структура в массиве значений",
-  app_missing_in_slice: "заявки нет в одном из срезов",
+  app_missing_in_slice: "нет в одном из срезов",
   float_beyond_int64: "число вне диапазона int64",
 };
 

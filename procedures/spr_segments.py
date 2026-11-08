@@ -46,7 +46,7 @@ PROCEDURE = {
     "params": {"multi_valued": {"PRODUCTS": ";", "PARTNER_TYPE": ";", "ROUTING_METHOD": ";"},
                "decision_field": "DECISION",
                "positive_decision": "APPROVE",
-               "labels": {"object": ["заявка", "заявки", "заявок"], "outcome": "решение", "positive": "одобрение",
+               "labels": {"object": ["заявка", "заявки", "заявок", "заявки"], "outcome": "решение", "positive": "одобрение",
                           "positive_rate": "доля одобрений"},
                "input_paths": ["characteristics.**", "ext_data.**", "appData.**"]},
     "entrypoint": run,

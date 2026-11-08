@@ -57,15 +57,15 @@ export const scopeQuery = (s: Scope) =>
   Object.keys(s).length ? `?scope=${encodeURIComponent(JSON.stringify(s))}` : "";
 
 export type Me = { user_id: string | null; login: string | null; run_id: string | null };
-export type Dataset = { path: string; run_id: string; applications: number | null; before: number; after: number; excluded: string[] };
+export type Dataset = { path: string; run_id: string; applications: number | null; before: number; after: number; excluded: string[]; slices?: string[] };
 export type Procedure = { id: string; kind: string; name: string; origin: "file" | "workspace"; path: string | null; sha: string; updated_at: string; mine: boolean; cid?: string | null; description?: string; overridden?: boolean; code?: string; params?: Record<string, unknown> };
-export type Selection = { normalize: string; compare: string; segments: string; lineage?: string | null; whatif?: string | null; parser?: string | null; ai_prompt?: string | null; steps?: string[]; checks: string[] };
+export type Selection = { normalize?: string | null; compare?: string | null; segments?: string | null; lineage?: string | null; whatif?: string | null; parser?: string | null; ai_prompt?: string | null; steps?: string[]; checks: string[] };
 export type Config = { id: string; name: string; dataset: string | null; procedure_ids: Selection; params: Record<string, unknown>; updated_at: string };
 export type RunStats = { apps?: number; changed_apps?: number; mart_rows?: number; comparison_rows?: number; facts?: number };
 export type Run = {
   id: string; name: string; state: "receiving" | "sealed" | "finalizing" | "done" | "failed" | "cancelled";
   apps: number; total_chunks: number | null; done_chunks: number; failed_chunks: number; stats: RunStats;
-  error: string | null; error_debug?: string | null; created_at: string; finished_at: string | null; sealed_at?: string | null; seal_requested?: boolean;
+  error: string | null; error_debug?: string | null; created_at: string; finished_at: string | null; sealed_at?: string | null; seal_requested?: boolean; config_id?: string | null;
   chunks?: { state: string; n: number; apps: number; changed: number }[];
   procedures?: Record<string, unknown>;
 };
