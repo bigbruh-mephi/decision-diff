@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Filter, Mono, Skeleton, cx, linkCls } from "../../components/ui";
 import { api, type CheckResult, type CheckRow } from "../../lib/api";
 import { cap, manyName, ms, n, plural } from "../../lib/format";
@@ -16,6 +16,8 @@ export function ChecksView({ runId }: { runId: string }) {
   const l = useLabels(runId);
   const checks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`) });
   const [filter, setFilter] = useState<"all" | "fail" | "pass">("all");
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const toggle = (i: number) => setOpen((o) => { const x = new Set(o); if (x.has(i)) x.delete(i); else x.add(i); return x; });
   const rows = useMemo(() => {
     const all = (checks.data ?? []).flatMap((c) => c.rows.map((r, row) => ({ ...r, check: c, row })));
     const rank = (r: CheckRow) => (r.RESULT === "FAIL" ? (r.CONFIDENCE === "HIGH" ? 0 : 1) : 2);
@@ -56,11 +58,23 @@ export function ChecksView({ runId }: { runId: string }) {
               <tbody>
                 {rows.map((r, i) => {
                   const v = verdict(r);
+                  const arg = r.ARGUMENT || "";
+                  const cut = arg.indexOf(": ");
+                  const head = cut > 0 ? arg.slice(0, cut) : arg.length > 60 ? "" : arg;
+                  const detail = cut > 0 ? arg.slice(cut + 2) : arg.length > 60 ? arg : "";
                   return (
-                    <tr key={i} className={cx("border-b border-line last:border-0", v.row)}>
+                    <Fragment key={i}>
+                    <tr className={cx("border-b border-line last:border-0", v.row)}>
                       <td className="px-4 py-1.5" title={`${ms(r.check.duration_ms)} · код ${r.check.check_sha.slice(0, 7)}`}>{r.LABEL}</td>
                       <td className="px-2 py-1.5 text-xs">{r.SOURCE === "AFTER" ? "AFTER (BETA)" : "BEFORE (MASTER)"}</td>
-                      <td className="max-w-80 truncate px-2 py-1.5" title={r.ARGUMENT}><Mono>{r.ARGUMENT || "—"}</Mono></td>
+                      <td className="max-w-80 px-2 py-1.5">
+                        <span className="flex items-center gap-2">
+                          {head && <Mono className="truncate">{head}</Mono>}
+                          {detail ? (
+                            <button className={cx(linkCls, "shrink-0 text-xs")} aria-expanded={open.has(i)} onClick={() => toggle(i)}>изменение {open.has(i) ? "▾" : "▸"}</button>
+                          ) : !head && "—"}
+                        </span>
+                      </td>
                       <td className="num px-2 py-1.5 text-right">{n(r.CNT)} / {n(r.TOTAL)}</td>
                       <td className="num px-2 py-1.5 text-right">{typeof r.METRIC === "number" ? Number(r.METRIC.toFixed(4)).toLocaleString("ru-RU") : r.METRIC}</td>
                       <td className="px-2 py-1.5"><Badge tone={v.tone}>{v.label}</Badge></td>
@@ -74,6 +88,12 @@ export function ChecksView({ runId }: { runId: string }) {
                         )}
                       </td>
                     </tr>
+                    {open.has(i) && detail && (
+                      <tr className="border-b border-line bg-surface-2">
+                        <td colSpan={7} className="px-4 py-2"><Mono className="whitespace-pre-wrap break-all">{detail}</Mono></td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>

@@ -12,9 +12,8 @@ import { JournalView } from "./run/Journal";
 import { Overview } from "./run/Overview";
 import { PivotView } from "./run/Pivot";
 import { Progress } from "./run/Progress";
-import { WhatIf } from "./run/WhatIf";
 
-export type RunSearch = { tab?: "overview" | "pivot" | "whatif" | "checks" | "apps" | "journal"; scope?: string; drill?: string; pv?: string };
+export type RunSearch = { tab?: "overview" | "pivot" | "checks" | "apps" | "journal"; scope?: string; drill?: string; pv?: string };
 
 export function parseScope(raw?: string): Scope {
   try {
@@ -174,7 +173,6 @@ export function RunPage() {
             { id: "checks", label: <>Автопроверки{fails > 0 && <> <Badge tone="fail">FAIL {fails}</Badge></>}</> },
             { id: "apps", label: cap(manyName(labels)) },
             { id: "pivot", label: "Сводная таблица", quiet: true },
-            { id: "whatif", label: "Что если", quiet: true },
             { id: "journal", label: "Журнал этапов", quiet: true },
           ]}
         />
@@ -196,7 +194,6 @@ export function RunPage() {
       {tab !== "journal" && !done && <Progress run={r} live={live} />}
       {done && tab === "overview" && <Overview runId={runId} scope={scope} />}
       {done && tab === "pivot" && <PivotView runId={runId} scope={scope} />}
-      {done && tab === "whatif" && <WhatIf runId={runId} scope={scope} />}
       {done && tab === "checks" && <ChecksView runId={runId} />}
       {done && tab === "apps" && <AppList runId={runId} scope={scope} drill={parseDrill(search.drill)} />}
     </div>

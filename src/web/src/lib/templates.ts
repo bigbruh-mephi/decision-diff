@@ -176,7 +176,7 @@ PROCEDURE = {
 }
 `;
 
-const whatif = (id: string) => `# %% Что если: kind "whatif"
+const whatif = (id: string) => `# %% Модель решения (по ней система находит причину каждой смены решения): kind "whatif"
 # Все, кроме entrypoint, - литералы: система читает объявление без исполнения кода.
 # inputs: имя -> путь витрины и тип (float | str | bool); unit_depth - сколько уровней массива образуют единицу расчета.
 # entrypoint(data, params) -> индекс исхода (outcome.values) для каждой заявки. Полный пример - файл spr_whatif.py.
@@ -190,7 +190,7 @@ def evaluate(data, params):
 
 PROCEDURE = {
     "id": "${id}",
-    "label": "Что если поменять порог",
+    "label": "Модель решения по порогу",
     "kind": "whatif",
     "unit_depth": 0,
     "inputs": {"score": {"path": "result.score", "type": "float"}},
@@ -226,7 +226,7 @@ export const TEMPLATES: { kind: string; title: string; make: (id: string) => str
   { kind: "compare", title: "Сравнение", make: compare },
   { kind: "segments", title: "Разрезы отчета", make: segments },
   { kind: "lineage", title: "Этапы цепочки решения", make: lineage },
-  { kind: "whatif", title: "Что если", make: whatif },
+  { kind: "whatif", title: "Модель решения", make: whatif },
   { kind: "ai_prompt", title: "Запрос к ИИ", make: aiPrompt },
 ];
 

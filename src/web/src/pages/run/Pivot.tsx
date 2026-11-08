@@ -215,9 +215,9 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
     const sc = clusterVal && clusterVal !== "none" ? { ...scope, cluster: Number(clusterVal) } : scope;
     go(sc, "apps", { cell: spec, filters: t.filters, title: describe(r, c) });
   };
-  const num = (v: number | undefined, r: string[], c: string[], base?: number, strong?: boolean) =>
+  const num = (v: number | undefined, r: string[], c: string[], base?: number, strong?: boolean, tone?: string) =>
     v ? (
-      <button onClick={() => openCell(r, c)} title={`${objects(v, lb)}: ${describe(r, c)}. Клик откроет список`} className={cx(linkCls, strong && "font-semibold")}>
+      <button onClick={() => openCell(r, c)} title={`${objects(v, lb)}: ${describe(r, c)}. Клик откроет список`} className={cx(linkCls, strong && "font-semibold", tone)}>
         {n(v)}
         {mode !== "count" && base ? <span className="ml-1 text-[11px] text-muted">{pct(v, base)}</span> : null}
       </button>
@@ -471,9 +471,13 @@ export function PivotView({ runId, scope }: { runId: string; scope: Scope }) {
                       })}
                       {table.cols.map((c) => {
                         const v = table.cell.get(r.join("\u0000") + "\u0001" + c.join("\u0000"));
+                        const si = table.colDims.indexOf("SOURCE");
+                        const other = si < 0 ? undefined : c.map((x, k) => (k === si ? (x === "BEFORE" ? "AFTER" : "BEFORE") : x));
+                        const differs = other && (v ?? 0) !== (table.cell.get(r.join("\u0000") + "\u0001" + other.join("\u0000")) ?? 0);
+                        const tone = differs ? (c[si] === "BEFORE" ? "font-medium text-fail" : "font-medium text-pass") : undefined;
                         return (
-                          <td key={c.join()} className="num border-b border-l border-line px-2 py-1 text-right group-hover:bg-surface-2">
-                            {num(v, r, c, v ? base(r, c) : undefined)}
+                          <td key={c.join()} className={cx("num border-b border-l border-line px-2 py-1 text-right group-hover:bg-surface-2", differs && (c[si] === "BEFORE" ? "bg-fail-bg/50" : "bg-pass-bg/50"))}>
+                            {num(v, r, c, v ? base(r, c) : undefined, false, tone)}
                           </td>
                         );
                       })}

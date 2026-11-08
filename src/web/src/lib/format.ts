@@ -50,7 +50,7 @@ export const KIND: Record<string, string> = {
   facts: "факты",
   check: "автопроверка",
   lineage: "цепочка решения",
-  whatif: "что если",
+  whatif: "модель решения",
   parser: "разбор формата",
   step: "шаг подготовки",
   ai_prompt: "запрос к ИИ",

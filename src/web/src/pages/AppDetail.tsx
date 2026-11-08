@@ -96,8 +96,8 @@ export function AppDetailPage() {
                           {r.TYPE_CHANGED && <Badge tone="warn">тип</Badge>}
                         </td>
                         <td className="max-w-48 truncate px-2 py-1 font-mono text-xs text-muted" title={r.ARRAY_KEY}>{r.ARRAY_KEY || "—"}</td>
-                        <td className="max-w-72 break-all px-2 py-1 font-mono">{r.VALUE_BEFORE ?? <span className="text-muted">нет атрибута</span>}</td>
-                        <td className={cx("max-w-72 break-all px-2 py-1 font-mono", r.CHANGE_TYPE !== "SAME" && "font-semibold")}>{r.VALUE_AFTER ?? <span className="font-normal text-muted">нет атрибута</span>}</td>
+                        <td className={cx("max-w-72 break-all px-2 py-1 font-mono", r.CHANGE_TYPE !== "SAME" && r.VALUE_BEFORE !== null && "bg-fail-bg text-fail")}>{r.VALUE_BEFORE ?? <span className="text-muted">нет атрибута</span>}</td>
+                        <td className={cx("max-w-72 break-all px-2 py-1 font-mono", r.CHANGE_TYPE !== "SAME" && r.VALUE_AFTER !== null && "bg-pass-bg font-semibold text-pass")}>{r.VALUE_AFTER ?? <span className="font-normal text-muted">нет атрибута</span>}</td>
                       </tr>
                     );
                   })}
