@@ -37,5 +37,6 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "rule_hit_rate", "label": "Частота срабатывания правил изменилась", "params": DEFAULTS,
+CHECK = {"id": "rule_hit_rate", "label": "Частота срабатывания правил изменилась",
+         "description": "Как часто срабатывает каждое правило до и после.", "params": DEFAULTS,
          "entrypoint": run}

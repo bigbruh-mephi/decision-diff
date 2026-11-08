@@ -171,7 +171,8 @@ CREATE TABLE IF NOT EXISTS ai_opinions (
 
 ALTER TABLE procedures DROP CONSTRAINT IF EXISTS procedures_kind_check;
 ALTER TABLE procedures ADD CONSTRAINT procedures_kind_check
-    CHECK (kind IN ('normalize', 'compare', 'segments', 'facts', 'check', 'lineage', 'whatif'));
+    CHECK (kind IN ('normalize', 'compare', 'segments', 'facts', 'check', 'lineage', 'whatif', 'parser',
+                    'step', 'ai_prompt'));
 
 CREATE TABLE IF NOT EXISTS whatif_runs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -188,3 +189,13 @@ CREATE TABLE IF NOT EXISTS whatif_runs (
 CREATE INDEX IF NOT EXISTS whatif_runs_last ON whatif_runs (run_id, user_id, created_at DESC);
 
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS seal_requested boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS pivot_templates (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    layout jsonb NOT NULL,
+    shared boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS pivot_templates_owner ON pivot_templates (owner_id);

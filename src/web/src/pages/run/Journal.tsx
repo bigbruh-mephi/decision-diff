@@ -104,7 +104,8 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title={`Порции · ${chunks.length}`} hint="Повторные попытки после сбоя видны в колонке попыток" />
+          <details>
+          <summary className="cursor-pointer select-none px-5 py-3 text-[13px] font-semibold">Порции · {chunks.length}{chunks.some((c) => c.state === "failed") && <Badge tone="fail">есть ошибки</Badge>} <span className="text-xs font-normal text-muted">технические детали обработки</span></summary>
           <div className="max-h-80 overflow-y-auto">
             <table className="w-full text-xs">
               <tbody>
@@ -124,6 +125,7 @@ export function JournalView({ runId, live }: { runId: string; live: unknown[] })
               </tbody>
             </table>
           </div>
+          </details>
         </Card>
         <Card>
           <CardHeader title="События прогона" />

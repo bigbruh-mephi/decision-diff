@@ -60,10 +60,16 @@ def run_chunk(input_uri, out_dir, snaps):
 
 def _chunk_body(input_uri, out_dir, snaps):
     n, c, s = (_proc(snaps[k]) for k in ("normalize", "compare", "segments"))
+    parser = _proc(snaps["parser"]) if snaps.get("parser") else None
     norm = n["params"]
     t0 = time.time()
     apps = list(ingest.read_chunk_zip(Path(input_uri).read_bytes(), norm.get("id_field"),
-                                      norm.get("xml_array_tags", ())))
+                                      norm.get("xml_array_tags", ()), parser and _user_parser(parser)))
+    tp, step_stages = time.time(), []
+    for st in (_proc(x) for x in snaps.get("steps") or []):
+        ts = time.time()
+        apps = [(app_id, _step(st, app_id, b), _step(st, app_id, a)) for app_id, b, a in apps]
+        step_stages.append(_stage(f"step:{st['id']}", st["sha"], ts, time.time(), len(apps), len(apps)))
     t1 = time.time()
     m, p, sg, iss, stats, t = chunk.process_apps(apps, n, c, s)
     t2 = time.time()
@@ -71,13 +77,34 @@ def _chunk_body(input_uri, out_dir, snaps):
     t3 = time.time()
     a = t1 + t["flatten"]
     b = a + t["compare"]
-    stages = [_stage("parse", None, t0, t1, rows_out=len(apps)),
+    stages = [_stage("parse", parser and parser["sha"], t0, tp, rows_out=len(apps)), *step_stages,
               _stage("normalize", n["sha"], t1, a, len(apps), m.num_rows),
               _stage("compare", c["sha"], a, b, m.num_rows, m.num_rows),
               _stage("segments", s["sha"], b, b + t["segments"], len(apps), sg.num_rows),
               _stage("write", None, t2, t3, rows_out=m.num_rows)]
     report = {**s["params"], "lineage": _proc(snaps["lineage"])["params"]} if snaps.get("lineage") else s["params"]
     return {**stats, "report_params": report}, stages
+
+
+def _step(st, app_id, doc):
+    """Apply one ``step`` procedure to one document (``None`` = app missing in the slice stays missing)."""
+    if doc is None:
+        return None
+    try:
+        return st["entrypoint"](doc, st["params"])
+    except Exception as e:
+        raise procedures.ProcedureError(f"{st['id']}: шаг подготовки, заявка {app_id}: {type(e).__name__}: {e}") from e
+
+
+def _user_parser(p):
+    """``parse_file`` over a ``parser`` procedure: string app ids, errors named after the procedure and the file."""
+    def parse_file(name, data):
+        try:
+            for app_id, doc in p["entrypoint"](name, data, p["params"]):
+                yield str(app_id), doc
+        except Exception as e:
+            raise procedures.ProcedureError(f"{p['id']}: разбор файла {name}: {type(e).__name__}: {e}") from e
+    return parse_file
 
 
 def build_run(chunk_dirs, run_file, report_params):
@@ -120,9 +147,11 @@ def _store_app_ids(run_file, sha, ids):
 
 
 def _causes(run_file):
-    """``{app_id: cause label}`` of the run's decision flips from ``attribution.json`` (``{}`` when there is none)."""
+    """``{app_id: cause label}`` of the run's decision flips from ``attribution.json`` (``{}`` when there is none or
+    the emulation does not reproduce every decision of the run, ``fidelity`` < 1)."""
     f = Path(run_file).parent / "attribution.json"
-    return {a: c["label"] for c in orjson.loads(f.read_bytes())["causes"] for a in c["app_ids"]} if f.is_file() else {}
+    att = orjson.loads(f.read_bytes()) if f.is_file() else {}
+    return {a: c["label"] for c in att["causes"] for a in c["app_ids"]} if att.get("fidelity") == 1 else {}
 
 
 def _check_body(run_file, snap, causes):

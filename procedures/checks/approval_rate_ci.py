@@ -58,5 +58,6 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "approval_rate_ci", "label": "Доля одобрений по сегментам: значимое изменение", "params": DEFAULTS,
+CHECK = {"id": "approval_rate_ci", "label": "Доля одобрений по сегментам: значимое изменение",
+         "description": "Доля одобрений по каждому значению разреза до и после и значимо ли она изменилась.", "params": DEFAULTS,
          "entrypoint": run}

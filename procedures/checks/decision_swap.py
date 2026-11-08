@@ -28,4 +28,5 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "decision_swap", "label": "Смена решения (swap-set)", "params": DEFAULTS, "entrypoint": run}
+CHECK = {"id": "decision_swap", "label": "Смена решения (swap-set)",
+         "description": "Сколько заявок перешло из одного решения в другое (например, одобрено -> отказ).", "params": DEFAULTS, "entrypoint": run}

@@ -196,6 +196,22 @@ def test_answer_cut_at_token_limit_fails_clearly_without_a_blind_repeat():
         ai._parse('{"analysis": "a"', ai.SCHEMA2)
 
 
+PROMPT = 'PROCEDURE = {"id": "p", "label": "p", "kind": "ai_prompt", "params": {"system": "Reviewer of plant sensors, ' \
+         'answer in {lang}."}}'
+
+
+def test_prompts_are_validated_data():
+    assert ai.prompts(PROMPT)["system"] == "Reviewer of plant sensors, answer in {lang}."
+    for text, err in (("{schema}", "нет обязательных подстановок {pack}"),
+                      ("{schema} {pack.__class__}", "недопустимые подстановки {pack.__class__}"),
+                      ("{schema} {pack:>99999999}", "недопустимые подстановки {pack:>99999999}"),
+                      ("{schema} {pack} {", "непарная фигурная скобка")):
+        with pytest.raises(procedures.ProcedureError, match=err):
+            ai.prompts(over={"call1": text})
+    with pytest.raises(procedures.ProcedureError, match="словарем-литералом"):
+        ai.prompts('P = {}\nPROCEDURE = {"id": "p", "label": "p", "kind": "ai_prompt", "params": dict(P)}')
+
+
 def test_opinion_end_to_end_against_fake_endpoint(run):
     spec = {"name": "shifted", "why": "w", "expr": "sa - sb = -140",
             "vars": {"sb": {"path": "score", "side": "before", "type": "num"},
@@ -209,7 +225,7 @@ def test_opinion_end_to_end_against_fake_endpoint(run):
          "text": "about 12 apps", "check_next": ""}]}
     fake = FakeLLM([(200, json.dumps(call1)), (200, json.dumps(call2))])
     try:
-        res = ai.opinion(*run, client=fake.client())
+        res = ai.opinion(*run, client=fake.client(), prompt=(PROMPT, None))
     finally:
         fake.srv.shutdown()
     assert {"state", "model", "findings", "usage", "timings", "error"} <= set(res) and res["state"] == "done"
@@ -220,4 +236,6 @@ def test_opinion_end_to_end_against_fake_endpoint(run):
     assert set(f) == {"title", "severity", "text", "derived_attribute", "evidence", "verified", "check_next"}
     assert [r["title"] for r in res["rejected"]] == ["made up"]
     sent = json.dumps(fake.requests)
+    assert fake.requests[0]["messages"][0]["content"] == "Reviewer of plant sensors, answer in Russian."
+    assert "EVIDENCE PACK" in fake.requests[0]["messages"][1]["content"]
     assert "APP-" not in sent and "mail.test" not in sent and res["privacy"]["masked_values"] > 0

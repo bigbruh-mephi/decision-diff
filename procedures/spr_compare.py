@@ -8,6 +8,7 @@ Example to treat them as equal: {"pattern": "**.rules.hit", "values": [["NULL", 
 PROCEDURE = {
     "id": "spr_compare",
     "label": "Ответы СПР: эквивалентные значения",
+    "description": "Какие разные значения считать одинаковыми при сравнении версий (например, пусто и false).",
     "kind": "compare",
     "params": {"equivalent": []},
 }

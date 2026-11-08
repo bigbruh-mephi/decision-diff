@@ -58,11 +58,13 @@ def render(rep, run, check_results, base):
         q = "?scope=" + urllib.parse.quote(orjson.dumps(scope).decode()) if scope else f"?tab={tab}" if tab else ""
         return f'<a href="{_e(app_url + view + q)}">{_e(text)}</a>'
 
-    tiles = [("Заявок", s["apps"], ""), ("С различиями", s["changed"], _pct(s["changed"], s["apps"])),
+    lb = s["labels"]
+    obj = (lb.get("object") or ["", "", "объектов"])[2]
+    tiles = [(obj.capitalize(), s["apps"], ""), ("С различиями", s["changed"], _pct(s["changed"], s["apps"])),
              ("Сменилось решение", s["decision_changed"], _pct(s["decision_changed"], s["apps"])),
              ("Различия есть, решение то же", s["changed_same_decision"], _pct(s["changed_same_decision"], s["apps"]))]
     if s["approval_before"] is not None:
-        tiles.append(("Доля одобрений (BEFORE → AFTER)", f"{_pct(s['approval_before'], 1)} → {_pct(s['approval_after'], 1)}", ""))
+        tiles.append((f"{lb.get('positive_rate', 'доля положительного исхода').capitalize()} (BEFORE → AFTER)", f"{_pct(s['approval_before'], 1)} → {_pct(s['approval_after'], 1)}", ""))
     fin = run.get("finished_at")
     fin = fin.strftime("%d.%m.%Y %H:%M %Z") if hasattr(fin, "strftime") else fin
     out = [(f"<!doctype html><html lang=ru><head><meta charset=utf-8><meta name=viewport "
@@ -71,17 +73,16 @@ def render(rep, run, check_results, base):
            f" (BETA) · завершён {_e(fin)} · {link('интерактивный отчёт')} · {link('сводная таблица', tab='pivot')}"
            f" · {link('автопроверки', tab='checks')}</p><div class=tiles>")]
     out += [f"<div class=tile><b>{_n(v)}</b><span>{_e(k)} {_e(p)}</span></div>" for k, v, p in tiles]
-    out.append("</div><h2>Куда сместились решения</h2><div class=wrap><table><tr><th>BEFORE<th>AFTER<th>Заявок")
+    out.append(f"</div><h2>Куда сместились решения</h2><div class=wrap><table><tr><th>BEFORE<th>AFTER<th>{_e(obj.capitalize())}")
     out += [f"<tr><td>{_e(r['before'])}<td>{_e(r['after'])}<td class=n>{_n(r['apps'])}" for r in s["swap"]]
-    out.append("</table></div><h2>Кластеры изменений</h2><div class=wrap><table><tr><th>№<th>Источник<th>Заявок"
-               "<th>Сменилось решение<th>Главные переходы")
+    out.append("</table></div><h2>Кластеры изменений</h2><div class=wrap><table><tr><th>№<th>Источник<th>"
+               f"{_e(obj.capitalize())}<th>Сменилось решение<th>Причина смены решения")
     for c in clusters:
         if c.get("cid") is None:
             out.append(f"<tr><td>…<td>ещё кластеров: {_n(c['clusters'])}<td class=n>{_n(c['apps'])}"
                        f"<td class=n>{_n(c['decision_changed'])}<td>")
             continue
-        tr = "<br>".join(f"<code>{_e(t['path'])}</code> {_e(t['before'])} → {_e(t['after'])} ({_n(t['apps'])})"
-                         for t in c["transitions"])
+        tr = "<br>".join(f"{_e(x['label'])} ({_n(x['apps'])})" for x in c["causes"])
         out.append(f"<tr><td>{link(c['cid'], f'/clusters/{c['cid']}')}<td><span class=badge>"
                    f"{_e(ORIGIN.get(c['origin'], c['origin']))}</span><td class=n>{_n(c['apps'])}"
                    f"<td class=n>{_n(c['decision_changed'])}<td>{tr}")

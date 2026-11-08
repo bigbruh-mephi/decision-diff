@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Badge, Bar, Card, CardHeader, ChangeGlyph, Empty, ErrorBox, Filter, Skeleton, Stat, cx, linkCls } from "../../components/ui";
-import { api, scopeQuery, type Attribute, type Cause, type CheckResult, type Cluster, type Scope, type SegmentField, type Structure, type Summary } from "../../lib/api";
-import { n, pct, plural, rate, tail } from "../../lib/format";
+import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton, Stat, cx, linkCls } from "../../components/ui";
+import { api, scopeQuery, type Cause, type CheckResult, type Cluster, type Scope, type SegmentField, type Summary } from "../../lib/api";
+import { LABELS, n, objects, ofObjects, pct, plural, rate, tail, type Labels } from "../../lib/format";
 import { useScopeNav } from "../Run";
 import { AiOpinion } from "./AiOpinion";
 
@@ -22,15 +22,16 @@ const MIN_SEGMENT = 100;
 
 const pp = (x: number) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${Math.abs(x * 100).toFixed(1).replace(".", ",")} п.п.`;
 
-function headline(s: Summary, delta: number | null) {
+function headline(s: Summary, delta: number | null, l: Labels) {
   if (!s.changed) return "Различий нет: обе версии стратегии дали одинаковый результат.";
-  const whole = plural(s.apps, "заявки", "заявок", "заявок");
-  if (!s.decision_changed) return `Различия есть у ${n(s.changed)} из ${whole}, но решения не сменились.`;
-  const approval = !delta ? "" : `, доля одобрений ${delta < 0 ? "упала" : "выросла"} на ${Math.abs(delta * 100).toFixed(1).replace(".", ",")} п.п.`;
-  return `Решение сменилось у ${n(s.decision_changed)} из ${whole} (${pct(s.decision_changed, s.apps)})${approval || "."}`;
+  const whole = ofObjects(s.apps, l);
+  const outcome = l.outcome[0].toUpperCase() + l.outcome.slice(1);
+  if (!s.decision_changed) return `Различия есть у ${n(s.changed)} из ${whole}, но ${l.outcome} не сменилось.`;
+  const approval = !delta ? "" : `, ${l.positive_rate} ${delta < 0 ? "упала" : "выросла"} на ${Math.abs(delta * 100).toFixed(1).replace(".", ",")} п.п.`;
+  return `${outcome} сменилось у ${n(s.decision_changed)} из ${whole} (${pct(s.decision_changed, s.apps)})${approval || "."}`;
 }
 
-function SwapMatrix({ s, onCell }: { s: Summary; onCell: (b: string, a: string) => void }) {
+function SwapMatrix({ s, l, onCell }: { s: Summary; l: Labels; onCell: (b: string, a: string) => void }) {
   const before = [...new Set(s.swap.map((x) => x.before))].sort();
   const after = [...new Set(s.swap.map((x) => x.after))].sort();
   const get = (b: string, a: string) => s.swap.find((x) => x.before === b && x.after === a)?.apps ?? 0;
@@ -59,7 +60,7 @@ function SwapMatrix({ s, onCell }: { s: Summary; onCell: (b: string, a: string) 
                     onClick={() => onCell(b, a)}
                     className={cx("num w-full rounded px-2 py-1.5 text-right", flip ? "font-semibold hover:ring-2 hover:ring-fail" : "text-muted hover:ring-2 hover:ring-line-strong")}
                     style={flip && v ? { background: `color-mix(in oklch, var(--fail) ${8 + (v / max) * 22}%, transparent)` } : undefined}
-                    title={flip ? `${b} → ${a}: ${plural(v, "заявка", "заявки", "заявок")}` : "решение не изменилось"}
+                    title={flip ? `${b} → ${a}: ${objects(v, l)}` : `${l.outcome} не изменилось`}
                   >
                     {n(v)}
                     <span className="block text-xs font-normal text-muted">{pct(v, s.apps)}</span>
@@ -74,18 +75,21 @@ function SwapMatrix({ s, onCell }: { s: Summary; onCell: (b: string, a: string) 
   );
 }
 
-const causeTitle = (x: Cause) =>
-  x.key === "other" ? "Ни одна комбинация факторов не возвращает решение BEFORE: причина в других изменениях"
-    : x.key === "unreproduced" ? "Процедура «что если» не воспроизводит решение AFTER у этих заявок"
-      : `Решение возвращается к BEFORE, если восстановить: ${x.label} («+» — только вместе, «или» — хватает любого)`;
+const META = new Set(["input", "several", "unreproduced"]);
+const EMULATION = "Причины посчитаны эмуляцией стратегии по данным прогона; она воспроизводит все фактические решения прогона, поэтому причинам можно доверять.";
 
-const clusterName = (c: Cluster) => `№${c.cid} · ${tail(c.transitions?.[0]?.path ?? c.paths?.[0] ?? "")}${(c.paths?.length ?? 0) > 1 ? ` и ещё ${c.paths!.length - 1}` : ""}`;
+const causeTitle = (x: Cause) =>
+  x.key === "several" ? `Ни одно изменение стратегии по отдельности не возвращает решение BEFORE: сработали несколько сразу. ${EMULATION}`
+    : x.key === "input" ? `Стратегия тут ни при чем: решение вернется, если вернуть только входные данные. ${EMULATION}`
+      : `${x.hint ?? `Решение возвращается к BEFORE, если вернуть только: ${x.label}`}. ${EMULATION}`;
+
+const clusterName = (c: Cluster) => `№${c.cid} · ${tail(c.transitions?.[0]?.path ?? c.paths?.[0] ?? "")}${(c.paths?.length ?? 0) > 1 ? ` и еще ${c.paths!.length - 1}` : ""}`;
 
 function mainCause(clusters: Cluster[]) {
   const total = new Map<string, { label: string; apps: number }>();
   for (const c of clusters)
     for (const x of c.causes ?? [])
-      if (x.key !== "other" && x.key !== "unreproduced") total.set(x.label, { label: x.label, apps: (total.get(x.label)?.apps ?? 0) + x.apps });
+      if (!META.has(x.key)) total.set(x.label, { label: x.label, apps: (total.get(x.label)?.apps ?? 0) + x.apps });
   return [...total.values()].sort((a, b) => b.apps - a.apps)[0];
 }
 
@@ -97,73 +101,52 @@ function ShowAll({ all, total, onToggle }: { all: boolean; total: number; onTogg
   );
 }
 
-function ClusterRow({ c, onOpen, onCause }: { c: Cluster; onOpen: (c: number) => void; onCause: (c: Cluster, x: Cause) => void }) {
+function ClusterRow({ c, l, onOpen, onCause }: { c: Cluster; l: Labels; onOpen: (c: number) => void; onCause: (c: Cluster, x: Cause) => void }) {
   if (!c.cid)
     return (
       <li className="flex justify-between gap-4 px-5 py-2 text-xs text-muted">
-        <span>ещё {plural(c.clusters ?? 0, "кластер", "кластера", "кластеров")}</span>
-        <span className="num">{plural(c.apps, "заявка", "заявки", "заявок")}</span>
+        <span>еще {plural(c.clusters ?? 0, "кластер", "кластера", "кластеров")}</span>
+        <span className="num">{objects(c.apps, l)}</span>
       </li>
     );
   return (
-    <li className="px-5 py-2.5">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px]">
-          {c.causes?.length ? (
-            c.causes.map((x) => (
-              <button key={x.key} className={cx("text-left", linkCls)} title={causeTitle(x)} onClick={() => onCause(c, x)}>
-                {x.label} <span className="num text-xs text-muted">{pct(x.apps, c.decision_changed, 0)}</span>
-              </button>
-            ))
-          ) : (
-            <span className="text-muted">причина не определена</span>
-          )}
-          {c.origin === "input" && <Badge tone="warn" title={`Изменились входные данные: ${c.input_paths?.join(", ")}`}>входные данные</Badge>}
-        </div>
-        <div className="num text-right text-[13px]">
-          <button className={linkCls} title="Открыть заявки кластера" onClick={() => onOpen(c.cid!)}>{n(c.decision_changed)} из {n(c.apps)}</button>
-        </div>
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 px-5 py-2.5">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px]">
+        {c.causes?.length ? (
+          c.causes.map((x) => (
+            <button key={x.key} className={cx("text-left", linkCls, META.has(x.key) && "text-muted")} title={causeTitle(x)} onClick={() => onCause(c, x)}>
+              {x.label} <span className="num text-xs text-muted">{pct(x.apps, c.decision_changed, 0)}</span>
+            </button>
+          ))
+        ) : (
+          <span className="text-muted" title={clusterName(c)}>{clusterName(c)}</span>
+        )}
       </div>
-      <details className="mt-1 text-xs text-muted">
-        <summary className="-mx-1 w-fit rounded px-1 select-none transition-colors hover:bg-surface-2 hover:text-fg">{clusterName(c)}</summary>
-        <ul className="mt-1 space-y-0.5">
-          {c.swap?.map((s) => (
-            <li key={s.before + s.after} className="num">{s.before} → {s.after}: {n(s.apps)}</li>
-          ))}
-          {c.transitions?.map((t) => (
-            <li key={t.path + t.before + t.after} className="flex flex-wrap items-baseline gap-x-1.5 font-mono">
-              <span title={t.path}>{tail(t.path!)}</span>
-              <span><span className="text-before">{t.before}</span> → <span className="text-after">{t.after}</span></span>
-              <span className="num">{n(t.apps)}</span>
-            </li>
-          ))}
-        </ul>
-      </details>
+      <div className="num text-right text-[13px]">
+        <button className={linkCls} title={`Открыть кластер ${clusterName(c)}`} onClick={() => onOpen(c.cid!)}>{n(c.decision_changed)} из {n(c.apps)}</button>
+      </div>
     </li>
   );
 }
 
-function Causes({ s, onOpen, onCause, onInput }: { s: Summary; onOpen: (c: number) => void; onCause: (c: Cluster, x: Cause) => void; onInput: () => void }) {
+function Causes({ s, l, onOpen, onCause }: { s: Summary; l: Labels; onOpen: (c: number) => void; onCause: (c: Cluster, x: Cause) => void }) {
   const [all, setAll] = useState(false);
   const rows = s.clusters.filter((c) => !c.cid || c.decision_changed);
   const main = mainCause(rows);
   return (
     <Card>
       <CardHeader
-        title={main ? `Главная причина смены решения: ${main.label} — ${plural(main.apps, "заявка", "заявки", "заявок")}` : "Из-за чего сменилось решение"}
-        hint="Заявки с одинаковым набором изменившихся атрибутов собраны в кластеры. Причина — что нужно вернуть из BEFORE, чтобы вернулось решение. Справа: сколько решений сменилось из всех заявок кластера"
-        actions={s.input_driven > 0 && (
-          <button className="num -mx-0.5 rounded px-0.5 text-xs text-warn underline underline-offset-2 transition-colors hover:bg-warn-bg" title="Изменилась не логика стратегии, а входные данные: возможна ложная тревога" onClick={onInput}>
-            {n(s.input_driven)} из-за входных данных
-          </button>
-        )}
+        title={main ? `Главная причина: ${main.label} - ${objects(main.apps, l)}` : `Из-за чего сменилось ${l.outcome}`}
+        hint={s.causes_fidelity != null && s.causes_fidelity < 1
+          ? `Причины скрыты: эмуляция стратегии воспроизводит только ${rate(s.causes_fidelity)} фактических решений прогона, ее выводам нельзя доверять`
+          : `Кластер - ${l.object[2]} с одинаковым набором изменений. Причина - одно изменение стратегии, откат которого возвращает ${l.outcome} BEFORE. Справа: сколько раз сменилось ${l.outcome} из всех ${l.object[2]} кластера`}
       />
       {!rows.length ? (
         <Empty title="Решения не менялись" />
       ) : (
         <ul className="divide-y divide-line">
           {(all ? rows : rows.slice(0, 3)).map((c) => (
-            <ClusterRow key={c.cid ?? "other"} c={c} onOpen={onOpen} onCause={onCause} />
+            <ClusterRow key={c.cid ?? "other"} c={c} l={l} onOpen={onOpen} onCause={onCause} />
           ))}
         </ul>
       )}
@@ -172,63 +155,7 @@ function Causes({ s, onOpen, onCause, onInput }: { s: Summary; onOpen: (c: numbe
   );
 }
 
-type AttrRow = Pick<Attribute, "path_id" | "PATH" | "apps" | "by_type"> & { decision_changed?: number; input?: boolean };
-
-function Attributes({ rows, structure, onPath }: { rows: Attribute[]; structure: Structure[]; onPath: (path: string) => void }) {
-  const [all, setAll] = useState(false);
-  const [kind, setKind] = useState<"all" | "value" | "structure">("all");
-  const byId = new Map(rows.map((r) => [r.path_id, r]));
-  const typeChanged = new Map(structure.map((x) => [x.path_id, x.apps_type_changed]));
-  const list: AttrRow[] =
-    kind === "all" ? rows
-      : kind === "value" ? rows.filter((r) => r.by_type.VALUE_CHANGED)
-        : structure.map((x) => byId.get(x.path_id) ?? { path_id: x.path_id, PATH: x.PATH, apps: x.apps_new + x.apps_lost + x.apps_type_changed, by_type: { ATTRIBUTE_NEW: x.apps_new, ATTRIBUTE_LOST: x.apps_lost } });
-  const max = Math.max(1, ...list.map((r) => r.apps));
-  const tied = rows.filter((r) => r.apps === rows[0]?.apps).length;
-  return (
-    <Card>
-      <CardHeader
-        title={rows[0] ? `Чаще всего меняется: ${tail(rows[0].PATH, 2)}${tied > 1 ? ` и ещё ${tied - 1}` : ""}` : "Какие атрибуты меняются"}
-        hint="Точное число заявок; ~ значение изменилось, + атрибут появился, − атрибут исчез. «Состав» — атрибуты, которые появились, исчезли или сменили тип: перекатанные модели, новые правила"
-        actions={<Filter value={kind} onChange={setKind} items={[{ id: "all", label: "все" }, { id: "value", label: "значения" }, { id: "structure", label: "состав" }]} />}
-      />
-      {!list.length ? (
-        <Empty title={kind === "structure" ? "Состав атрибутов не изменился" : "Атрибуты не менялись"} />
-      ) : (
-        <ul>
-          {(all ? list : list.slice(0, 5)).map((r) => {
-            const types = Object.entries(r.by_type).filter(([, v]) => v > 0);
-            const type = typeChanged.get(r.path_id);
-            return (
-              <li key={r.path_id} className="px-5 py-2">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3">
-                  <span className="flex min-w-0 items-baseline gap-2">
-                    <button onClick={() => onPath(r.PATH)} className={cx("min-w-0 truncate text-left font-mono text-xs", linkCls)} title={r.PATH}>{tail(r.PATH, 2)}</button>
-                    {r.input && <Badge tone="warn">вход</Badge>}
-                    {!!type && <Badge tone="warn">тип {n(type)}</Badge>}
-                  </span>
-                  <span className="num text-[13px]">{n(r.apps)}</span>
-                </div>
-                <div className="mt-1 flex items-center gap-3">
-                  <div className="flex-1"><Bar total={max} parts={[{ value: r.apps, className: "bg-muted/50", label: "заявок" }]} /></div>
-                  <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
-                    {r.decision_changed === r.apps ? <span>все со сменой решения</span> : r.decision_changed ? <span className="num">смена решения {n(r.decision_changed)}</span> : r.decision_changed === 0 ? <span>решение то же</span> : null}
-                    {types.map(([k, v]) => (
-                      <span key={k} className="num"><ChangeGlyph type={k} />{types.length > 1 && ` ${n(v)}`}</span>
-                    ))}
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {list.length > 5 && <ShowAll all={all} total={list.length} onToggle={() => setAll(!all)} />}
-    </Card>
-  );
-}
-
-function Segments({ fields, overall, onValue }: { fields: SegmentField[]; overall: number; onValue: (f: string, v: string) => void }) {
+function Segments({ fields, overall, l, onValue }: { fields: SegmentField[]; overall: number; l: Labels; onValue: (f: string, v: string) => void }) {
   const shown = fields
     .filter((f) => !/_(BEFORE|AFTER|CHANGED)$/.test(f.field) && f.values.length > 1 && f.values.length <= 31)
     .map((f) => {
@@ -246,7 +173,7 @@ function Segments({ fields, overall, onValue }: { fields: SegmentField[]; overal
   const scale = Math.max(overall, ...shown.flatMap((f) => f.values.map((v) => v.r)), 0.0001);
   return (
     <Card>
-      <CardHeader title={title} hint={`Доля смены решения по значениям разрезов. Вертикальная черта — среднее по срезу (${rate(overall)}); выделены отклонения от ${Math.round(STANDOUT * 100)} п.п. Сегменты меньше ${MIN_SEGMENT} заявок бледные: вывод по ним предварительный. Клик сужает отчёт до сегмента`} />
+      <CardHeader title={title} hint={`Доля смены (${l.outcome}) по значениям разрезов. Вертикальная черта - среднее по срезу (${rate(overall)}); выделены отклонения от ${Math.round(STANDOUT * 100)} п.п. Сегменты меньше ${MIN_SEGMENT} ${l.object[2]} бледные: вывод по ним предварительный. Клик сужает отчет до сегмента`} />
       {!shown.length ? (
         <Empty title="Нет разрезов для сравнения" />
       ) : (
@@ -279,14 +206,14 @@ function Segments({ fields, overall, onValue }: { fields: SegmentField[]; overal
   );
 }
 
-function SameDecision({ s, onAll, onCluster }: { s: Summary; onAll: () => void; onCluster: (c: Cluster) => void }) {
+function SameDecision({ s, l, onAll, onCluster }: { s: Summary; l: Labels; onAll: () => void; onCluster: (c: Cluster) => void }) {
   const [all, setAll] = useState(false);
   const rows = s.clusters.filter((c) => c.cid && c.apps > c.decision_changed).sort((a, b) => b.apps - b.decision_changed - (a.apps - a.decision_changed));
   return (
     <Card>
       <CardHeader
-        title={<>Различия есть, а решение то же: <button className={cx("num", linkCls)} onClick={onAll}>{plural(s.changed_same_decision, "заявка", "заявки", "заявок")}</button></>}
-        hint="Изменение прошло мимо решения. Это не значит, что оно безвредно: у таких заявок могли смениться оффер, балл или порог"
+        title={<>Различия есть, а {l.outcome} то же: <button className={cx("num", linkCls)} onClick={onAll}>{objects(s.changed_same_decision, l)}</button></>}
+        hint={`Изменение прошло мимо (${l.outcome}). Это не значит, что оно безвредно: у таких ${l.object[2]} могли смениться другие атрибуты`}
       />
       <ul className="divide-y divide-line">
         {(all ? rows : rows.slice(0, 3)).map((c) => (
@@ -305,12 +232,12 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
   const q = scopeQuery(scope);
   const go = useScopeNav(runId);
   const summary = useQuery({ queryKey: ["summary", runId, q], queryFn: () => api.get<Summary>(`/api/runs/${runId}/summary${q}`) });
-  const attrs = useQuery({ queryKey: ["attributes", runId, q], queryFn: () => api.get<Attribute[]>(`/api/runs/${runId}/attributes${q}`) });
   const segs = useQuery({ queryKey: ["segments", runId, q], queryFn: () => api.get<SegmentField[]>(`/api/runs/${runId}/segments${q}`) });
   const checks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`) });
   if (summary.isLoading) return <Skeleton rows={10} />;
   if (summary.error || !summary.data) return <ErrorBox error={summary.error} />;
   const s = summary.data;
+  const l = { ...LABELS, ...s.labels };
   const rows = (checks.data ?? []).flatMap((c) => c.rows);
   const failHigh = rows.filter((r) => r.RESULT === "FAIL" && r.CONFIDENCE === "HIGH").length;
   const failLow = rows.filter((r) => r.RESULT === "FAIL" && r.CONFIDENCE === "LOW").length;
@@ -319,25 +246,25 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
   const delta = s.approval_before != null && s.approval_after != null ? s.approval_after - s.approval_before : null;
   const flips = s.swap.filter((x) => x.before !== x.after).sort((a, b) => b.apps - a.apps);
   const flipped = `${s.decision_field}_CHANGED`;
-  const openPath = (path: string) => go(scope, "apps", { cell: { PATH: path }, filters: { DIFF_FLAG: ["1"] }, title: path });
-  const sameDecision = { filters: { DIFF_FLAG: ["1"] }, title: "заявки с различиями и тем же решением" };
+  const sameDecision = { filters: { DIFF_FLAG: ["1"] }, title: `${l.object[1]} с различиями и тем же исходом` };
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
-        <h2 className="font-display text-[22px] font-normal leading-snug">{headline(s, delta)}</h2>
-        <button className="flex flex-wrap items-center gap-1.5 -mx-1 self-start rounded px-1 py-0.5 text-xs text-muted transition-colors hover:bg-surface-2 hover:text-fg" onClick={() => go(scope, "checks")}>
+        <h2 className="font-display text-[22px] font-normal leading-snug">{headline(s, delta, l)}</h2>
+        <button className="mt-1 flex flex-wrap items-center gap-2 self-start rounded-lg border border-line-strong bg-surface px-3 py-2 text-[13px] font-medium transition-colors hover:border-accent hover:bg-accent-bg" onClick={() => go(scope, "checks")}>
           Автопроверки:
           <Badge tone={failHigh ? "fail" : "pass"}>FAIL {failHigh}</Badge>
           {failLow > 0 && <Badge tone="low">FAIL с низкой уверенностью {failLow}</Badge>}
           <Badge tone="pass">PASS {rows.length - failHigh - failLow}</Badge>
           {errors > 0 && <Badge tone="fail">ошибок исполнения: {errors}</Badge>}
+          <span className="text-xs font-normal text-accent">открыть отчет проверок →</span>
         </button>
       </div>
       <section aria-label="Вердикт" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Сменилось решение" value={n(s.decision_changed)} sub={pct(s.decision_changed, s.apps)} tone={s.decision_changed ? "fail" : undefined} onClick={() => go({ ...scope, seg: { ...scope.seg, [flipped]: ["1"] } }, "apps")} />
-        <Stat label="Доля одобрений" value={delta == null ? "—" : pp(delta)} sub={delta == null ? undefined : `${rate(s.approval_before)} → ${rate(s.approval_after)}`} tone={delta != null && delta < 0 ? "fail" : undefined} />
-        <Stat label="Есть различия" value={n(s.changed)} sub={`${pct(s.changed, s.apps)} из ${plural(s.apps, "заявки", "заявок", "заявок")}`} onClick={() => go(scope, "apps", { filters: { DIFF_FLAG: ["1"] }, title: "заявки с различиями" })} />
-        <Stat label="Различия есть, решение то же" value={n(s.changed_same_decision)} sub={`${pct(s.changed_same_decision, s.changed)} изменений прошли мимо`} onClick={() => go({ ...scope, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} />
+        <Stat label={`Сменилось ${l.outcome}`} value={n(s.decision_changed)} sub={pct(s.decision_changed, s.apps)} tone={s.decision_changed ? "fail" : undefined} onClick={() => go({ ...scope, seg: { ...scope.seg, [flipped]: ["1"] } }, "apps")} />
+        <Stat label={l.positive_rate[0].toUpperCase() + l.positive_rate.slice(1)} value={delta == null ? "—" : pp(delta)} sub={delta == null ? undefined : `${rate(s.approval_before)} → ${rate(s.approval_after)}`} tone={delta != null && delta < 0 ? "fail" : undefined} />
+        <Stat label="Есть различия" value={n(s.changed)} sub={`${pct(s.changed, s.apps)} из ${ofObjects(s.apps, l)}`} onClick={() => go(scope, "apps", { filters: { DIFF_FLAG: ["1"] }, title: `${l.object[1]} с различиями` })} />
+        <Stat label={`Различия есть, ${l.outcome} то же`} value={n(s.changed_same_decision)} sub={`${pct(s.changed_same_decision, s.changed)} изменений прошли мимо`} onClick={() => go({ ...scope, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} />
       </section>
       {!!s.issues?.length && (
         <details className="rounded-lg bg-warn-bg px-5 py-3 text-[13px]">
@@ -345,7 +272,7 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
           <ul className="mt-2 space-y-1">
             {s.issues.map((i) => (
               <li key={i.kind} className="flex flex-wrap items-center justify-between gap-2">
-                <span>{ISSUE[i.kind] ?? i.kind} <span className="num text-muted">· {plural(i.apps, "заявка", "заявки", "заявок")}, {plural(i.rows, "место", "места", "мест")}</span></span>
+                <span>{ISSUE[i.kind] ?? i.kind} <span className="num text-muted">· {objects(i.apps, l)}, {plural(i.rows, "место", "места", "мест")}</span></span>
                 <button className={cx("text-xs", linkCls)} onClick={() => go({ ...scope, apps: i.examples }, "apps")}>примеры: {i.examples.join(", ")}</button>
               </li>
             ))}
@@ -355,22 +282,21 @@ export function Overview({ runId, scope }: { runId: string; scope: Scope }) {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Causes
           s={s}
+          l={l}
           onOpen={(c) => go({ ...scope, cluster: c }, "apps")}
           onCause={(c, x) => go({ ...scope, cluster: c.cid!, cause: { key: x.key, label: x.label } }, "apps")}
-          onInput={() => { const c = s.clusters.find((x) => x.origin === "input"); if (c?.cid) go({ ...scope, cluster: c.cid }, "apps"); }}
         />
         <Card>
-          <CardHeader title={flips.length ? flips.map((x) => `${x.before} → ${x.after}: ${n(x.apps)}`).join(" · ") : "Решения не сместились"} hint="Матрица переходов BEFORE × AFTER; клик по ячейке открывает заявки" />
-          <SwapMatrix s={s} onCell={(b, a) => go({ ...scope, seg: { ...scope.seg, [`${s.decision_field}_BEFORE`]: [b], [`${s.decision_field}_AFTER`]: [a] } }, "apps")} />
+          <CardHeader title={flips.length ? flips.map((x) => `${x.before} → ${x.after}: ${n(x.apps)}`).join(" · ") : `${l.outcome[0].toUpperCase() + l.outcome.slice(1)} не сместилось`} hint={`Матрица переходов BEFORE × AFTER; клик по ячейке открывает ${l.object[2]}`} />
+          <SwapMatrix s={s} l={l} onCell={(b, a) => go({ ...scope, seg: { ...scope.seg, [`${s.decision_field}_BEFORE`]: [b], [`${s.decision_field}_AFTER`]: [a] } }, "apps")} />
         </Card>
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
-        {attrs.error ? <ErrorBox error={attrs.error} /> : attrs.data ? <Attributes rows={attrs.data} structure={s.structure} onPath={openPath} /> : <Card><Skeleton /></Card>}
-        {segs.error ? <ErrorBox error={segs.error} /> : segs.data ? <Segments fields={segs.data} overall={s.apps ? s.decision_changed / s.apps : 0} onValue={(f, v) => go(seg(f, v))} /> : <Card><Skeleton /></Card>}
+        {segs.error ? <ErrorBox error={segs.error} /> : segs.data ? <Segments fields={segs.data} overall={s.apps ? s.decision_changed / s.apps : 0} l={l} onValue={(f, v) => go(seg(f, v))} /> : <Card><Skeleton /></Card>}
+        {s.changed_same_decision > 0 && (
+        <SameDecision s={s} l={l} onAll={() => go({ ...scope, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} onCluster={(c) => go({ ...scope, cluster: c.cid!, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} />
+        )}
       </div>
-      {s.changed_same_decision > 0 && (
-        <SameDecision s={s} onAll={() => go({ ...scope, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} onCluster={(c) => go({ ...scope, cluster: c.cid!, seg: { ...scope.seg, [flipped]: ["0"] } }, "apps", sameDecision)} />
-      )}
       <AiOpinion runId={runId} />
     </div>
   );

@@ -2,9 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Badge, Button, ErrorBox, Skeleton, Tabs, inputCls, titleCls } from "../components/ui";
-import { api, type Dataset, type Run, type Scope } from "../lib/api";
+import { api, type Dataset, type Run, type Scope, type Summary } from "../lib/api";
 import { useRunEvents } from "../lib/events";
-import { plural } from "../lib/format";
+import { LABELS, objects, plural, type Labels } from "../lib/format";
 import { StateBadge } from "./Runs";
 import { AppList } from "./run/AppList";
 import { ChecksView } from "./run/Checks";
@@ -14,7 +14,7 @@ import { PivotView } from "./run/Pivot";
 import { Progress } from "./run/Progress";
 import { WhatIf } from "./run/WhatIf";
 
-export type RunSearch = { tab?: "overview" | "pivot" | "whatif" | "checks" | "apps" | "journal"; scope?: string; drill?: string };
+export type RunSearch = { tab?: "overview" | "pivot" | "whatif" | "checks" | "apps" | "journal"; scope?: string; drill?: string; pv?: string };
 
 export function parseScope(raw?: string): Scope {
   try {
@@ -34,8 +34,15 @@ export function useScopeNav(runId: string) {
         tab: tab ?? prev.tab,
         scope: Object.values(scope).some((v) => v !== undefined) ? JSON.stringify(scope) : undefined,
         drill: drill ? JSON.stringify(drill) : undefined,
+        pv: prev.pv,
       }),
     });
+}
+
+/** Domain words of a finished run (segments procedure param ``labels``) over generic defaults. */
+export function useLabels(runId: string, enabled = true): Labels {
+  const s = useQuery({ queryKey: ["summary", runId, ""], queryFn: () => api.get<Summary>(`/api/runs/${runId}/summary`), enabled });
+  return { ...LABELS, ...s.data?.labels };
 }
 
 export type Drill = { cell?: Record<string, string>; path?: string; filters?: Record<string, string[]>; transition?: { path_id: number; before: string; after: string }; title?: string };
@@ -123,13 +130,15 @@ export function RunPage() {
   });
   const share = useMutation({ mutationFn: () => api.post<{ url: string }>(`/api/runs/${runId}/share`) });
   const cancel = useMutation({ mutationFn: () => api.post(`/api/runs/${runId}/cancel`), onSuccess: () => run.refetch() });
+  const labels = useLabels(runId, run.data?.state === "done");
 
   if (run.isLoading) return <Skeleton rows={8} />;
   if (run.error || !run.data) return <ErrorBox error={run.error} />;
   const r = run.data;
   const done = r.state === "done";
+
   const tab = search.tab ?? (done ? "overview" : "journal");
-  const setTab = (t: RunSearch["tab"]) => nav({ to: "/runs/$runId", params: { runId }, search: { tab: t, scope: search.scope, drill: t === "apps" ? search.drill : undefined } });
+  const setTab = (t: RunSearch["tab"]) => nav({ to: "/runs/$runId", params: { runId }, search: { tab: t, scope: search.scope, drill: t === "apps" ? search.drill : undefined, pv: search.pv } });
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -137,8 +146,7 @@ export function RunPage() {
         <h1 className={titleCls}>{r.name}</h1>
         <StateBadge state={r.state} />
         <p className="num text-xs text-muted">
-          {plural(r.apps, "заявка", "заявки", "заявок")} · {r.total_chunks != null ? plural(r.total_chunks, "порция", "порции", "порций") : "… порций"}
-          {r.stats?.mart_rows ? <> · витрина {plural(r.stats.mart_rows, "строка", "строки", "строк")}</> : null}
+          {objects(r.apps, labels)}
         </p>
       </div>
       {share.data && (

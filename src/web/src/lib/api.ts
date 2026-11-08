@@ -58,8 +58,8 @@ export const scopeQuery = (s: Scope) =>
 
 export type Me = { user_id: string | null; login: string | null; run_id: string | null };
 export type Dataset = { path: string; run_id: string; applications: number | null; before: number; after: number; excluded: string[] };
-export type Procedure = { id: string; kind: string; name: string; origin: "file" | "workspace"; path: string | null; sha: string; updated_at: string; mine: boolean; code?: string; params?: Record<string, unknown> };
-export type Selection = { normalize: string; compare: string; segments: string; lineage?: string | null; checks: string[] };
+export type Procedure = { id: string; kind: string; name: string; origin: "file" | "workspace"; path: string | null; sha: string; updated_at: string; mine: boolean; cid?: string | null; description?: string; overridden?: boolean; code?: string; params?: Record<string, unknown> };
+export type Selection = { normalize: string; compare: string; segments: string; lineage?: string | null; whatif?: string | null; parser?: string | null; ai_prompt?: string | null; steps?: string[]; checks: string[] };
 export type Config = { id: string; name: string; dataset: string | null; procedure_ids: Selection; params: Record<string, unknown>; updated_at: string };
 export type RunStats = { apps?: number; changed_apps?: number; mart_rows?: number; comparison_rows?: number; facts?: number };
 export type Run = {
@@ -76,13 +76,12 @@ export type Cluster = {
   paths?: string[]; input_paths?: string[]; transitions?: Transition[]; swap?: Swap[]; clusters?: number;
   causes?: Cause[];
 };
-export type Cause = { key: string; label: string; apps: number };
-export type Structure = { path_id: number; PATH: string; PREFIX: string; apps_new: number; apps_lost: number; apps_type_changed: number; apps_before: number; apps_after: number };
+export type Cause = { key: string; label: string; hint?: string | null; apps: number };
 export type Summary = {
   decision_field: string; apps: number; changed: number; decision_changed: number; changed_same_decision: number; unchanged: number;
   approval_before: number | null; approval_after: number | null; input_driven: number; swap: Swap[];
-  run: { id: string; name: string; stats: RunStats }; structure: Structure[]; clusters: Cluster[];
-  issues?: { kind: string; apps: number; rows: number; examples: string[] }[];
+  run: { id: string; name: string; stats: RunStats }; clusters: Cluster[];
+  issues?: { kind: string; apps: number; rows: number; examples: string[] }[]; labels?: Partial<import("./format").Labels>; causes_fidelity?: number | null;
 };
 export type Attribute = { path_id: number; PATH: string; PREFIX: string; KEY: string; apps: number; decision_changed: number; input: boolean; by_type: Record<string, number>; transitions: Transition[] };
 export type SegmentField = { field: string; values: { value: string; apps: number; changed: number; decision_changed: number }[] };
@@ -96,6 +95,8 @@ export type AppDetail = {
 };
 export type Pivot = { dims: string[]; cells: (string | number)[][]; truncated: boolean; ms: number; row_totals?: (string | number)[][]; col_totals?: (string | number)[][]; total?: number };
 export type Fields = { fact: Record<string, string[]>; segment: Record<string, string[]>; cluster: string[] };
+export type PivotLayout = { rows: string[]; cols: string[]; filters: Record<string, string[]>; mode?: "count" | "row" | "col" | "total" };
+export type PivotTemplate = { id: string; name: string; layout: PivotLayout; shared: boolean; mine: boolean; owner?: string };
 export type Journal = {
   stages: { stage: string; code_sha: string | null; executions: number; failed: number; started_at: string; ended_at: string; cpu_ms: number; rows_in: number | null; rows_out: number | null; error: string | null; error_debug?: string | null }[];
   events: { id: number; ts: string; type: string; data: Record<string, unknown> }[];

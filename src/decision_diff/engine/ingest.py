@@ -65,8 +65,9 @@ def write_chunk_zip(path, items):
                     z.write(p, f"{side}/{p.name}")
 
 
-def read_chunk_zip(data, id_field=None, xml_array_tags=()):
-    """Yield ``(app_id, before_doc, after_doc)`` from chunk zip bytes; every member is parsed by its format."""
+def read_chunk_zip(data, id_field=None, xml_array_tags=(), parse_file=None):
+    """Yield ``(app_id, before_doc, after_doc)`` from chunk zip bytes; every member is parsed by its format, or by
+    ``parse_file(name, data) -> [(app_id, doc)]`` (a user ``parser`` procedure) when given."""
     docs = {}
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         for info in z.infolist():
@@ -74,7 +75,8 @@ def read_chunk_zip(data, id_field=None, xml_array_tags=()):
             if info.is_dir() or side not in ("BEFORE", "AFTER"):
                 continue
             try:
-                for app_id, tree in parse(name, z.read(info), id_field, xml_array_tags):
+                for app_id, tree in (parse_file(name, z.read(info)) if parse_file else
+                                     parse(name, z.read(info), id_field, xml_array_tags)):
                     docs.setdefault(app_id, {})[side] = tree
             except FormatError as e:
                 raise FormatError(f"файл {info.filename}: {e}") from e

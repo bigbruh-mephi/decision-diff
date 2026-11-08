@@ -41,10 +41,13 @@ def run(before, after, params):
 PROCEDURE = {
     "id": "spr_segments",
     "label": "Ответы СПР: слой разрезов (решение, продукты, целевая модель, порог, внешний скор)",
+    "description": "Какие признаки заявки показывать в отчете как разрезы и фильтры: решение до и после, продукты, модель, порог.",
     "kind": "segments",
     "params": {"multi_valued": {"PRODUCTS": ";", "PARTNER_TYPE": ";", "ROUTING_METHOD": ";"},
                "decision_field": "DECISION",
                "positive_decision": "APPROVE",
+               "labels": {"object": ["заявка", "заявки", "заявок"], "outcome": "решение", "positive": "одобрение",
+                          "positive_rate": "доля одобрений"},
                "input_paths": ["characteristics.**", "ext_data.**", "appData.**"]},
     "entrypoint": run,
 }

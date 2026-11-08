@@ -94,3 +94,13 @@ def test_config_delete_is_owner_only(client, run_id):
     assert client.delete(f"/api/configs/{mine['id']}").status_code == 200
     assert mine["id"] not in {c["id"] for c in client.get("/api/configs").json()}
     client.delete(f"/api/runs/{run_id}/share")
+
+
+def test_pivot_templates_crud_and_validation(client):
+    layout = {"rows": ["PATH"], "cols": ["SOURCE"], "filters": {"DIFF_FLAG": ["1"]}, "mode": "row"}
+    t = client.post("/api/pivot-templates", json={"name": "live tpl", "layout": layout, "shared": True}).json()
+    assert t["layout"] == layout and t["mine"]
+    assert client.put(f"/api/pivot-templates/{t['id']}", json={"name": "renamed", "layout": layout}).json()["name"] == "renamed"
+    assert client.post("/api/pivot-templates", json={"name": "x", "layout": {"rows": ["A"], "cols": ["A"]}}).status_code == 422
+    assert client.delete(f"/api/pivot-templates/{t['id']}").status_code == 204
+    assert client.delete(f"/api/pivot-templates/{t['id']}").status_code == 404

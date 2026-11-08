@@ -76,4 +76,5 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "score_shift", "label": "Сдвиг распределения скоров (PSI, KS)", "params": DEFAULTS, "entrypoint": run}
+CHECK = {"id": "score_shift", "label": "Сдвиг распределения скоров (PSI, KS)",
+         "description": "Сдвинулось ли распределение числовых оценок между версиями (PSI, KS).", "params": DEFAULTS, "entrypoint": run}

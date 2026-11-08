@@ -204,8 +204,9 @@ class Worker:
             async def full(s, kind):
                 row = await db.code(c, s["sha"])
                 return {**s, "kind": kind, "code": row["code"], "name": row["name"]}
-            out = {k: await full(v, k) for k, v in procs.items() if k != "checks"}
+            out = {k: await full(v, k) for k, v in procs.items() if k not in ("checks", "steps")}
             out["checks"] = [await full(v, "check") for v in procs.get("checks", [])]
+            out["steps"] = [await full(v, "step") for v in procs.get("steps", [])]
             return out
 
     async def on_check(self, t):
@@ -247,7 +248,8 @@ class Worker:
         """AI second opinion of a finished run in the trusted pool (no user code); the result lands in ai_opinions."""
         run_id = t["run_id"]
         async with self.pool.connection() as c:
-            row = await (await c.execute("""SELECT r.report_params FROM ai_opinions a JOIN runs r ON r.id = a.run_id
+            row = await (await c.execute("""SELECT r.report_params, r.procedures FROM ai_opinions a
+                                            JOIN runs r ON r.id = a.run_id
                                             WHERE a.run_id = %s AND a.state = 'pending' AND r.state = 'done'""",
                                          (run_id,))).fetchone()
             if not row:
@@ -255,14 +257,16 @@ class Worker:
             checks = await (await c.execute("""SELECT DISTINCT ON (check_id) label, rows FROM check_results
                                                WHERE run_id = %s ORDER BY check_id, created_at DESC""",
                                             (run_id,))).fetchall()
+            sel = (row["procedures"] or {}).get("ai_prompt")
+            prompt = sel and ((await db.code(c, sel["sha"]))["code"], sel.get("params"))
         t0 = time.time()
         try:
             res = await self.cpu_trusted(ai.opinion, str(settings.run_dir(run_id) / "run.duckdb"),
-                                         row["report_params"] or {}, checks)
+                                         row["report_params"] or {}, checks, None, prompt)
         except Exception as e:
             res = {"state": "failed", "model": settings.llm_model, "findings": [], "error": f"{type(e).__name__}: {e}"}
         async with self.pool.connection() as c:
-            await db.journal(c, run_id, -1, [{"stage": "ai", "code_sha": None, "started_at": t0,
+            await db.journal(c, run_id, -1, [{"stage": "ai", "code_sha": sel and sel["sha"], "started_at": t0,
                                               "status": "done" if res["state"] == "done" else "failed",
                                               "duration_ms": (time.time() - t0) * 1000, "rows_in": len(checks),
                                               "rows_out": len(res["findings"]), "error": res.get("error")}])

@@ -1,24 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, CardHeader, ErrorBox, Field, Skeleton, inputCls, titleCls } from "../components/ui";
 import { api, type Config, type Dataset, type Procedure, type Run, type Selection } from "../lib/api";
 import { KIND, dt, n, plural } from "../lib/format";
 
-const STAGES: { kind: "normalize" | "compare" | "segments"; title: string; hint: string }[] = [
+const STEPS: { kind: "parser" | "normalize" | "compare" | "segments" | "lineage" | "whatif" | "ai_prompt"; title: string; hint: string; empty?: string }[] = [
+  { kind: "parser", title: "Разбор формата", hint: "Свой разборщик входных файлов (новый протокол или тип данных); исполняется в песочнице", empty: "встроенный: JSON, XML, YAML, CSV и другие (автоопределение)" },
   { kind: "normalize", title: "Приведение (нормализация)", hint: "Ключи массивов, исключения, бакеты, переименования" },
   { kind: "compare", title: "Сравнение", hint: "Эквивалентные значения и правила сравнения" },
-  { kind: "segments", title: "Разрезы и факты отчёта", hint: "Слой разрезов: решение, продукты, модель, порог" },
+  { kind: "segments", title: "Разрезы и факты отчета", hint: "Слой разрезов: решение, продукты, модель, порог" },
+  { kind: "lineage", title: "Этапы цепочки решения", hint: "Этапы до и после продукта по путям атрибутов: для атрибуции «логика или входные данные»", empty: "не задавать" },
+  { kind: "whatif", title: "Модель решения", hint: "По ней система находит причину каждой смены решения", empty: "последняя измененная" },
+  { kind: "ai_prompt", title: "Запрос к ИИ-рецензенту", hint: "Тексты запросов к языковой модели; используются и при повторном запросе мнения ИИ", empty: "по умолчанию (procedures/ai_prompt.py)" },
 ];
 
-function ProcSelect({ items, value, onChange }: { items: Procedure[]; value: string; onChange: (v: string) => void }) {
+function ProcSelect({ items, value, onChange, empty }: { items: Procedure[]; value: string; onChange: (v: string) => void; empty?: string }) {
+  const desc = items.find((p) => p.id === value)?.description;
   return (
+    <div>
     <div className="flex items-center gap-2">
       <select className={inputCls + " min-w-0 flex-1"} value={value} onChange={(e) => onChange(e.target.value)}>
+        {empty && <option value="">{empty}</option>}
         {items.map((p) => (
           <option key={p.id} value={p.id}>
             {p.origin === "file" ? "📄 " : "✎ "}
-            {p.name} {p.path ? `(${p.path})` : "(рабочая область)"}
+            {p.name} {p.path ? `(${p.path})` : "(моя версия)"}{p.overridden ? " - заменен моей версией" : ""}
           </option>
         ))}
       </select>
@@ -28,6 +35,41 @@ function ProcSelect({ items, value, onChange }: { items: Procedure[]; value: str
         </Link>
       )}
     </div>
+    {desc && <p className="mt-1 text-xs text-muted">{desc}</p>}
+    </div>
+  );
+}
+
+function StepList({ items, value, onChange }: { items: Procedure[]; value: string[]; onChange: (v: string[]) => void }) {
+  const move = (i: number, d: number) => { const v = [...value]; [v[i], v[i + d]] = [v[i + d], v[i]]; onChange(v); };
+  return (
+    <Field label="Подготовка документов" hint={value.length ? undefined : "Шаги до приведения: каждый - функция (doc, params) -> doc, выполняются по порядку"}>
+      <div className="flex flex-col gap-1">
+        {value.map((id, i) => {
+          const p = items.find((x) => x.id === id);
+          return (
+            <div key={id + i} className="flex items-start gap-2 rounded border border-line px-2 py-1 text-[13px]">
+              <span className="w-5 text-muted">{i + 1}.</span>
+              <span className="min-w-0 flex-1">
+                {p?.name ?? id}
+                {p?.description && <span className="block text-xs text-muted">{p.description}</span>}
+              </span>
+              <Link to="/workspace" search={{ proc: id }} className="text-xs text-accent hover:underline">код</Link>
+              <Button size="sm" variant="ghost" aria-label="Выше" disabled={i === 0} onClick={() => move(i, -1)}>↑</Button>
+              <Button size="sm" variant="ghost" aria-label="Ниже" disabled={i === value.length - 1} onClick={() => move(i, 1)}>↓</Button>
+              <Button size="sm" variant="ghost" aria-label="Убрать шаг" onClick={() => onChange(value.filter((_, j) => j !== i))}>×</Button>
+            </div>
+          );
+        })}
+        <div className="flex items-center gap-2">
+          <select className={inputCls + " w-64"} value="" aria-label="Добавить шаг" onChange={(e) => e.target.value && onChange([...value, e.target.value])}>
+            <option value="">+ добавить шаг…</option>
+            {items.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <Link to="/workspace" className="text-xs text-accent hover:underline">написать новый шаг</Link>
+        </div>
+      </div>
+    </Field>
   );
 }
 
@@ -104,6 +146,7 @@ export function NewRunPage() {
   const [sample, setSample] = useState("");
   const [params, setParams] = useState<Params>({});
   const [invalid, setInvalid] = useState<string[]>([]);
+  const [setup, setSetup] = useState(true);
 
   useEffect(() => {
     if (!sel && procs.data)
@@ -112,7 +155,8 @@ export function NewRunPage() {
         compare: byKind.compare?.[0]?.id ?? "",
         segments: byKind.segments?.[0]?.id ?? "",
         lineage: byKind.lineage?.[0]?.id ?? null,
-        checks: (byKind.check ?? []).map((p) => p.id),
+        steps: [],
+        checks: (byKind.check ?? []).filter((p) => !p.overridden).map((p) => p.id),
       });
   }, [procs.data, byKind, sel]);
   useEffect(() => {
@@ -123,12 +167,18 @@ export function NewRunPage() {
     setConfigId(id);
     const c = configs.data?.find((x) => x.id === id);
     if (c) {
-      setSel(c.procedure_ids);
+      const mine = (id: string | null | undefined) => {
+        const p = procs.data?.find((x) => x.id === id);
+        return (p?.overridden && procs.data?.find((x) => x.origin === "workspace" && x.kind === p.kind && x.cid === p.cid)?.id) || id;
+      };
+      const ids = c.procedure_ids;
+      setSel({ ...ids, normalize: mine(ids.normalize)!, compare: mine(ids.compare)!, segments: mine(ids.segments)!, lineage: mine(ids.lineage), whatif: mine(ids.whatif), parser: mine(ids.parser), ai_prompt: mine(ids.ai_prompt), steps: (ids.steps ?? []).map((x) => mine(x)!), checks: [...new Set(ids.checks.map((x) => mine(x)!))] });
       if (c.dataset) setDataset(c.dataset);
       setName(c.name);
       setSample(c.params?.sample_apps ? String(c.params.sample_apps) : "");
       setParams((c.params ?? {}) as Params);
       setInvalid([]);
+      setSetup(false);
     }
   };
 
@@ -143,7 +193,7 @@ export function NewRunPage() {
       setDataset(d.path);
     },
   });
-  const chosen = sel ? [sel.normalize, sel.compare, sel.segments, ...(sel.lineage ? [sel.lineage] : []), ...sel.checks].filter(Boolean) : [];
+  const chosen = sel ? [sel.parser, sel.normalize, sel.compare, sel.segments, sel.lineage, sel.whatif, sel.ai_prompt, ...(sel.steps ?? []), ...sel.checks].filter((x): x is string => !!x) : [];
   const chosenParams = Object.fromEntries(Object.entries(params).filter(([k]) => chosen.includes(k)));
   const sampleApps = sample ? Number(sample) : null;
   const configParams = { ...chosenParams, ...(sampleApps ? { sample_apps: sampleApps } : {}) };
@@ -246,24 +296,22 @@ export function NewRunPage() {
           {upload.error && <ErrorBox error={upload.error} />}
         </div>
       </Card>
-      {sel && (
+      {sel && setup && (
         <Card>
           <CardHeader title="2. Процедуры" hint="📄 файл, размещённый в системе · ✎ код из рабочей области. Обработчик меняется без изменения кода приложения." />
           <div className="grid grid-cols-1 gap-3 p-4">
-            {STAGES.map((st) => (
-              <Field key={st.kind} label={st.title} hint={st.hint}>
-                <ProcSelect items={byKind[st.kind] ?? []} value={sel[st.kind]} onChange={(v) => setSel({ ...sel, [st.kind]: v })} />
-              </Field>
+            {STEPS.map((st) => (
+              <Fragment key={st.kind}>
+                <Field label={st.title} hint={sel[st.kind] ? undefined : st.hint}>
+                  <ProcSelect items={byKind[st.kind] ?? []} value={sel[st.kind] ?? ""} empty={st.empty} onChange={(v) => setSel({ ...sel, [st.kind]: v || null })} />
+                </Field>
+                {st.kind === "parser" && <StepList items={byKind.step ?? []} value={sel.steps ?? []} onChange={(steps) => setSel({ ...sel, steps })} />}
+              </Fragment>
             ))}
-            {(byKind.lineage ?? []).length > 0 && (
-              <Field label="Цепочка этапов решения" hint="Вход → признаки → скоры → порог → правила → решение: для атрибуции «логика или входные данные»">
-                <ProcSelect items={byKind.lineage ?? []} value={sel.lineage ?? ""} onChange={(v) => setSel({ ...sel, lineage: v })} />
-              </Field>
-            )}
           </div>
         </Card>
       )}
-      {sel && (
+      {sel && setup && (
         <Card>
           <CardHeader
             title={`3. Автопроверки (${sel.checks.length} из ${(byKind.check ?? []).length})`}
@@ -275,20 +323,20 @@ export function NewRunPage() {
           />
           <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
             {(byKind.check ?? []).map((p) => (
-              <label key={p.id} className="flex min-w-0 items-center gap-2 rounded px-2 py-1 hover:bg-surface-2">
+              <label key={p.id} title={p.description} className={"flex min-w-0 items-center gap-2 rounded px-2 py-1 hover:bg-surface-2" + (p.overridden ? " opacity-60" : "")}>
                 <input
                   type="checkbox"
                   checked={sel.checks.includes(p.id)}
                   onChange={(e) => setSel({ ...sel, checks: e.target.checked ? [...sel.checks, p.id] : sel.checks.filter((x) => x !== p.id) })}
                 />
                 <span className="truncate">{p.name}</span>
-                <Badge>{p.origin === "file" ? "файл" : "рабочая область"}</Badge>
+                <Badge>{p.origin === "file" ? (p.overridden ? "заменен моей версией" : "файл") : "моя версия"}</Badge>
               </label>
             ))}
           </div>
         </Card>
       )}
-      {sel && (
+      {sel && setup && (
         <Card>
           <CardHeader title="4. Параметры процедур" hint="JSON поверх параметров, объявленных в коде; раскройте процедуру, чтобы изменить" />
           <div className="grid grid-cols-1 gap-1.5 p-4">
@@ -305,6 +353,16 @@ export function NewRunPage() {
                 />
               ) : null;
             })}
+          </div>
+        </Card>
+      )}
+      {sel && !setup && (
+        <Card>
+          <div className="flex items-center gap-3 px-4 py-3 text-[13px]">
+            <span className="min-w-0 flex-1 text-muted">
+              Шаги, процедуры и автопроверки заданы конфигурацией: {plural(sel.steps?.length ?? 0, "шаг подготовки", "шага подготовки", "шагов подготовки")}, {plural(sel.checks.length, "проверка", "проверки", "проверок")}
+            </span>
+            <Button size="sm" onClick={() => setSetup(true)}>Настроить</Button>
           </div>
         </Card>
       )}

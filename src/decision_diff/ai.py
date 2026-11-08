@@ -10,12 +10,14 @@ after the confirmed ones, marked unverified with the reason. Everything here is 
 import fnmatch
 import json
 import re
+import string
 import threading
 import time
 
 import duckdb
 import httpx
 
+from .engine.procedures import ProcedureError, declaration
 from .report import RunReport, _glob
 from .settings import settings
 
@@ -23,67 +25,44 @@ PACK_TOKENS = 20_000
 MAX_SPECS = 16
 SPEC_TIMEOUT_S = 10
 LANG = "Russian"
+PROMPT_MAX_CHARS = 20_000
+PROMPT_FIELDS = {"system": ({"lang"}, set()), "call1": ({"schema", "pack", "max_h", "n_apps"}, {"schema", "pack"}),
+                 "call2": ({"schema", "derived", "max_f"}, {"schema", "derived"})}
 
-SYSTEM = """You are an independent senior risk-strategy reviewer giving a second opinion on a change of a credit
-decision strategy. Two versions (BEFORE = production, AFTER = candidate) were run on the same applications; the
-system has already computed every count you see. Your value is what the deterministic report and the user's
-checks do NOT say: meta-conclusions that follow from relations between attributes, stages and applicant data.
 
-How to reason (silently, then fill `analysis`):
-1. Read the change clusters K (apps grouped by the exact set of changed attributes) and the headline H.
-2. For every cluster ask: is the change caused by the strategy (rules, cut-offs, models) or by the input data
-   (attributes that should be identical in both runs)? Use D (numeric delta profiles: a constant offset or ratio on
-   many apps is a data/scale defect, not real behaviour) and S (segment values that describe who is in a cluster,
-   with precision/recall; explained=false means the segments do not explain the selection).
-3. Look for inconsistencies a human sees from meaning, not statistics: rule names/descriptions vs applicant values
-   in samples A, elements present only with one value (P), partial changes of the same BEFORE state (R: only part
-   of identical apps changed - targeted rollout, hidden attribute, or a bug).
-4. Compare with the check results C: do not restate a failing check; say what it misses or misattributes.
-5. Every hypothesis that needs a number the pack does not contain must be stated as a derived attribute (vars +
-   SQL expression) so the system measures it on all applications. Never estimate numbers yourself.
-
-Hard rules: use only the provided items; cite item ids; prefer "insufficient data" to guessing; identifiers such as
-rule or model names go in backticks; write user-facing text in {lang}. Answer with one JSON object only."""
-
-CALL1 = """TASK (call 1 of 2): propose up to {max_h} hypotheses, each with one or more derived attributes the system
-will evaluate over all {n_apps} applications.
-
-Derived attribute = {{"name": snake_case, "why": text, "vars": {{alias: {{"path": PATH from schema M, "elem":
-glob over ARRAY_KEY (e.g. "*|RULE_NAME") or null, "side": "before"|"after", "agg": "value"|"min"|"max"|"count"|
-"list", "type": "num"|"text"}}}}, "where": optional SQL boolean population filter, "expr": SQL boolean}}.
-Allowed in expressions: the aliases, built-ins flipped, changed, cluster ('K1'..), decision_before, decision_after,
-comparisons, AND/OR/NOT, arithmetic, CASE, BETWEEN, IN, IS NULL, LIKE, abs, coalesce, least, greatest, round,
-list_contains, len, lower, upper, starts_with, contains, regexp_matches. Values are strings unless type=num;
-absent attributes are NULL. The system returns n_population, n_true, flip rates inside/outside, split by cluster.
-
-JSON schema of your answer:
-{schema}
-
-EVIDENCE PACK (JSON; sections H headline, K clusters, D deltas, R partial changes/flips, S segment descriptors,
-P presence, C checks, A samples, M schema):
-{pack}"""
-
-CALL2 = """TASK (call 2 of 2): the system evaluated your derived attributes. Measurements X (refused specs carry the
-reason; you may not re-submit). Write the final opinion.
-- Keep only hypotheses the measurements support; mark the others as refuted in `analysis`, never in findings.
-- Numbers in title, text and check_next ONLY as placeholders {{ID.field}} pointing at a cited item (e.g.
-  {{X3.n_true}}, {{K2.apps}}, {{R5.by_elem.NAME.0}}); never type digits except inside backticked identifiers.
-- `evidence` lists item ids only ("X3", "K2"), never "X3.n_true". Shares as percent: {{X3.flip_rate_true:%}}.
-  Attribute values (cut-off 0.55, product 751) only in backticks: `0.55`, `751`.
-- Measurement fields: n_true = applications where expr is true; n_true_flipped = how many of THEM changed the
-  decision (co-occurrence, not "caused by"); flip_rate_true vs flip_rate_rest = decision-change rate inside vs outside
-  that set. Say "caused by" only from K.causes: the system's counterfactual - restoring that BEFORE factor alone (or
-  the listed combination) reverts exactly that many flips of the cluster.
-- claim_type "relation" (any statement that two sets coincide, overlap, explain or exclude each other) must cite
-  the X that measures it and state `expects` (none|some|all) - the system checks it.
-- At most {max_f} findings, most decision-relevant first; each with what to check next.
-
-JSON schema of your answer:
-{schema}
-
-(The conversation continues from your call-1 answer; the evidence pack above is still valid.)
-MEASUREMENTS X:
-{derived}"""
+def prompts(code=None, over=None):
+    """Reviewer prompts ``{system, call1, call2}``: the default ``procedures/ai_prompt.py``, then the literal params of
+    an ``ai_prompt`` procedure ``code`` (read from source, never executed), then ``over``; validated placeholders."""
+    p, default = {}, settings.procedures_dir / "ai_prompt.py"
+    for src, name in ((default.read_text(encoding="utf-8") if default.is_file() else None, str(default)),
+                      (code, "запрос к ИИ")):
+        if src:
+            params = declaration(src, name)[1].get("params")
+            if not isinstance(params, dict):
+                raise ProcedureError(f"{name}: params должен быть словарем-литералом с текстами system, call1, call2")
+            p |= params
+    p |= over or {}
+    for k, (allowed, required) in PROMPT_FIELDS.items():
+        t = p.get(k)
+        if not isinstance(t, str) or not t.strip():
+            raise ProcedureError(f"запрос к ИИ: не задан текст {k!r}")
+        if len(t) > PROMPT_MAX_CHARS:
+            raise ProcedureError(f"запрос к ИИ: текст {k!r} длиннее {PROMPT_MAX_CHARS} символов")
+        try:
+            fields = list(string.Formatter().parse(t))
+        except ValueError as e:
+            raise ProcedureError(f"запрос к ИИ, текст {k!r}: непарная фигурная скобка ({e}); фигурную скобку как "
+                                 "текст пишите двойной: {{ или }}") from e
+        names = {f for _, f, _, _ in fields if f is not None}
+        bad = sorted({"{" + f + (f"!{conv}" if conv else "") + (f":{spec}" if spec else "") + "}"
+                      for _, f, spec, conv in fields if f is not None and (f not in allowed or spec or conv)})
+        if bad:
+            raise ProcedureError(f"запрос к ИИ, текст {k!r}: недопустимые подстановки {', '.join(bad)}; доступны "
+                                 f"{', '.join(sorted(f'{{{a}}}' for a in allowed))}")
+        if required - names:
+            raise ProcedureError(f"запрос к ИИ, текст {k!r}: нет обязательных подстановок "
+                                 f"{', '.join(sorted(f'{{{a}}}' for a in required - names))}")
+    return {k: p[k] for k in PROMPT_FIELDS}
 
 DERIVED = {"type": "object", "required": ["name", "why", "vars", "expr"],
            "properties": {"name": {"type": "string"}, "why": {"type": "string"},
@@ -673,9 +652,12 @@ class Client:
                                                                    f"JSON object matching the schema, nothing else."}]
 
 
-def opinion(run_file, params, checks=(), client=None):
-    """Full second opinion for a finished run file; returns the stored result shape (state ``done``)."""
+def opinion(run_file, params, checks=(), client=None, prompt=None):
+    """Full second opinion for a finished run file; returns the stored result shape (state ``done``).
+
+    ``prompt`` is ``(code, params)`` of the run's ``ai_prompt`` procedure (default prompts without it)."""
     params = params or {}
+    tpl = prompts(*(prompt or ()))
     client = client or Client(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout_s)
     t, t0 = {}, time.perf_counter()
     rep = RunReport(run_file, params)
@@ -685,8 +667,9 @@ def opinion(run_file, params, checks=(), client=None):
         pack = build_pack(rep, checks, mask)
         t["pack_s"] = round(time.perf_counter() - t0, 2)
         n = len(rep.app_id)
-        msgs = [{"role": "system", "content": SYSTEM.replace("{lang}", LANG)},
-                {"role": "user", "content": CALL1.format(max_h=8, n_apps=n, schema=_dump(SCHEMA1), pack=_dump(pack))}]
+        msgs = [{"role": "system", "content": tpl["system"].format(lang=LANG)},
+                {"role": "user", "content": tpl["call1"].format(max_h=8, n_apps=n, schema=_dump(SCHEMA1),
+                                                                pack=_dump(pack))}]
         t1 = time.perf_counter()
         a1, msgs = client.chat(msgs, SCHEMA1, "hypotheses", temperature=0.5)
         t["call1_s"] = round(time.perf_counter() - t1, 2)
@@ -698,7 +681,7 @@ def opinion(run_file, params, checks=(), client=None):
         t1 = time.perf_counter()
         xs = measure_all(rep.con, specs, paths)
         t["measure_s"] = round(time.perf_counter() - t1, 2)
-        msgs.append({"role": "user", "content": CALL2.format(max_f=7, schema=_dump(SCHEMA2), derived=_dump(xs))})
+        msgs.append({"role": "user", "content": tpl["call2"].format(max_f=7, schema=_dump(SCHEMA2), derived=_dump(xs))})
         t1 = time.perf_counter()
         a2, _ = client.chat(msgs, SCHEMA2, "findings")
         t["call2_s"] = round(time.perf_counter() - t1, 2)

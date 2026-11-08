@@ -155,31 +155,38 @@ def test_pivot_totals_are_distinct_apps(run):
     rep.con.close()
 
 
-def test_attribution_minimal_reverting_factor_subsets(tmp_path, monkeypatch):
-    """Each flip gets the minimal factor subsets that bring back BEFORE: alone, only together, either, none."""
+def test_attribution_single_strategy_cause(tmp_path, monkeypatch):
+    """Each flip gets the one strategy factor that reverts it alone, else input-only or several; causes are hidden
+    when the emulation does not reproduce every decision of the run."""
     pytest.importorskip("numpy")
     from decision_diff import whatif
 
     monkeypatch.setattr(pipeline, "settings", dataclasses.replace(pipeline.settings, sandbox="off"))
     after = [doc(pd=0.4, decision="REJECT")] * 3 + [doc(cut=0.7, decision="REJECT")] * 2 + \
-            [doc(pd=0.45, cut=0.65, decision="REJECT")] * 2 + [doc(pd=0.55, cut=0.58, decision="REJECT")] + \
-            [doc(decision="REJECT")] + [doc()] * 2
+            [doc(pd=0.45, cut=0.65, decision="REJECT")] * 2 + [doc(pd=0.55, cut=0.58, decision="REJECT")] + [doc()] * 2
     params = {"decision_field": "DECISION", "positive_decision": "APPROVE", "lineage": LINEAGE}
     path = build([(f"A{i:02d}", doc(), a) for i, a in enumerate(after)], tmp_path / "run.duckdb", params)
-    code = WHATIF.replace('"entrypoint": evaluate}', '"factors": {"cut": {"label": "порог", "inputs": ["cut"]}, '
-                          '"score": {"label": "скор", "inputs": ["pd"]}}, "entrypoint": evaluate}')
-    prep = whatif.prepare_factors(str(path), code, str(tmp_path / "cache"))
-    assert whatif.attribute(code, "t", prep, str(tmp_path / "attribution.json")) == {"flips": 9, "causes": 5}
-    rep = RunReport(path, params)
-    got = {c["key"]: (c["label"], [rep.app_id[i] for i in c["apps"]]) for c in rep.causes}
-    assert got == {"score": ("скор", ["A00", "A01", "A02"]), "cut": ("порог", ["A03", "A04"]),
-                   "cut+score": ("порог + скор", ["A05", "A06"]), "cut|score": ("порог или скор", ["A07"]),
-                   "unreproduced": ("процедура не воспроизводит решение", ["A08"])}
-    for c in rep.cluster_rows({}):
-        assert sum(x["apps"] for x in c["causes"]) == c["decision_changed"]
-    assert len(rep.scope({"cause": {"key": "cut"}})) == 2
-    rep.con.close()
+    for score, want in (("", {"score": ["A00", "A01", "A02"], "cut": ["A03", "A04"], "several": ["A05", "A06", "A07"]}),
+                        (', "strategy": False', {"input": ["A00", "A01", "A02"],
+                                                 "cut": ["A03", "A04", "A05", "A06", "A07"]})):
+        code = WHATIF.replace('"entrypoint": evaluate}', '"factors": {"cut": {"label": "порог", "inputs": ["cut"]}, '
+                              f'"score": {{"label": "скор", "inputs": ["pd"]{score}}}}}, "entrypoint": evaluate}}')
+        prep = whatif.prepare_factors(str(path), code, str(tmp_path / "cache"))
+        assert whatif.attribute(code, "t", prep, str(tmp_path / "attribution.json"))["flips"] == 8
+        rep = RunReport(path, params)
+        assert {c["key"]: [rep.app_id[i] for i in c["apps"]] for c in rep.causes} == want
+        for c in rep.cluster_rows({}):
+            assert sum(x["apps"] for x in c["causes"]) == c["decision_changed"]
+        rep.con.close()
+    assert len(rep.scope({"cause": {"key": "cut"}})) == 5
     con = mart.open_run(path)
-    assert pipeline._with_lineage(con, {"a": "@attribution"}, pipeline._causes(path))["a"]["A05"] == "порог + скор"
+    assert pipeline._with_lineage(con, {"a": "@attribution"}, pipeline._causes(path))["a"]["A05"] == "порог"
     con.close()
+    bad = build([(f"A{i:02d}", doc(), a) for i, a in enumerate(after + [doc(decision="REJECT")])],
+                tmp_path / "bad" / "run.duckdb", params)
+    whatif.attribute(code, "t", whatif.prepare_factors(str(bad), code, str(tmp_path / "c3")),
+                     str(tmp_path / "bad" / "attribution.json"))
+    rep = RunReport(bad, params)
+    assert rep.causes_fidelity < 1 and rep.causes == [] and pipeline._causes(bad) == {}
+    rep.con.close()
     assert whatif.prepare_factors(str(path), WHATIF, str(tmp_path / "c2")) is None

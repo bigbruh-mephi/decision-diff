@@ -128,5 +128,6 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "lineage_attribution", "label": "Источник изменения по цепочке решения", "params": DEFAULTS,
+CHECK = {"id": "lineage_attribution", "label": "Источник изменения по цепочке решения",
+         "description": "На каком этапе цепочки решения начинается изменение каждой заявки: во входных данных или в логике.", "params": DEFAULTS,
          "entrypoint": run}

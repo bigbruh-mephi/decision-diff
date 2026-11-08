@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Badge, Card, CardHeader, Empty, ErrorBox, Skeleton, titleCls, linkCls } from "../components/ui";
 import { api, type Run } from "../lib/api";
-import { STATE, dt, n, pct, plural } from "../lib/format";
+import { STATE, dt, n, pct } from "../lib/format";
 import { useRunEvents } from "../lib/events";
 
 export function StateBadge({ state }: { state: Run["state"] }) {
@@ -36,16 +36,14 @@ export function RunsPage() {
                 <tr className="border-b border-line">
                   <th className="px-5 py-2.5 font-medium">Прогон</th>
                   <th className="px-2 py-2.5 font-medium">Статус</th>
-                  <th className="px-2 py-2.5 text-right font-medium">Заявок</th>
+                  <th className="px-2 py-2.5 text-right font-medium">Объектов</th>
                   <th className="px-2 py-2.5 text-right font-medium">С различиями</th>
-                  <th className="px-2 py-2.5 font-medium">Порции</th>
                   <th className="px-2 py-2.5 font-medium">Создан</th>
                   <th className="px-5 py-2.5 text-right font-medium">Длительность</th>
                 </tr>
               </thead>
               <tbody>
                 {runs.data.map((r) => {
-                  const total = r.total_chunks ?? 0;
                   const sec = r.finished_at ? (new Date(r.finished_at).getTime() - new Date(r.created_at).getTime()) / 1000 : null;
                   return (
                     <tr key={r.id} className="border-b border-line last:border-0 hover:bg-surface-2">
@@ -60,7 +58,6 @@ export function RunsPage() {
                       <td className="num px-2 py-3 text-right">
                         {r.stats?.changed_apps != null ? <>{n(r.stats.changed_apps)} <span className="text-muted">({pct(r.stats.changed_apps, r.stats.apps ?? r.apps)})</span></> : "—"}
                       </td>
-                      <td className="num px-2 py-3 text-muted">{total ? `${r.done_chunks}/${total}` : r.done_chunks ? `${r.done_chunks}/…` : "—"}{r.failed_chunks ? <span className="text-fail"> · {plural(r.failed_chunks, "ошибка", "ошибки", "ошибок")}</span> : null}</td>
                       <td className="px-2 py-3 text-muted">{dt(r.created_at)}</td>
                       <td className="num px-5 py-3 text-right text-muted">{sec != null ? `${sec.toFixed(1).replace(".", ",")} с` : "…"}</td>
                     </tr>

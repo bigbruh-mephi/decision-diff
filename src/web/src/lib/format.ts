@@ -51,6 +51,9 @@ export const KIND: Record<string, string> = {
   check: "автопроверка",
   lineage: "цепочка решения",
   whatif: "что если",
+  parser: "разбор формата",
+  step: "шаг подготовки",
+  ai_prompt: "запрос к ИИ",
   cell: "ячейка",
 };
 
@@ -85,3 +88,8 @@ export const tail = (path: string, k = 3) => {
   const parts = path.split(".");
   return parts.length > k ? "…" + parts.slice(-k).join(".") : path;
 };
+
+export type Labels = { object: string[]; outcome: string; positive: string; positive_rate: string };
+export const LABELS: Labels = { object: ["объект", "объекта", "объектов"], outcome: "исход", positive: "положительный исход", positive_rate: "доля положительного исхода" };
+export const objects = (x: number, l: Labels) => plural(x, l.object[0], l.object[1], l.object[2]);
+export const ofObjects = (x: number, l: Labels) => plural(x, l.object[1], l.object[2], l.object[2]);

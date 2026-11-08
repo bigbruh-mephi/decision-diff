@@ -17,8 +17,9 @@ from the source without executing it. ``entrypoint(data, params)`` returns one o
 - ``metrics`` (API, no user code): approval rate, swap matrices vs BEFORE / AFTER, fidelity and per-segment deltas
   from the ``RunReport`` bitmaps under a scope.
 - ``prepare_factors`` + ``attribute`` (worker, at finalize): an optional literal ``factors`` section
-  ``{name: {"label", "inputs": [input names]}}`` names what can be restored from BEFORE; every flip gets the minimal
-  factor subsets that revert it, stored in ``attribution.json`` next to the run file (``RunReport.causes``).
+  ``{name: {"label", "inputs": [input names], "hint", "strategy"}}`` names what can be restored from BEFORE; every
+  flip gets the single strategy factor that reverts it, stored in ``attribution.json`` next to the run file
+  (``RunReport.causes``) with the emulation's fidelity.
 """
 
 import base64
@@ -194,7 +195,8 @@ def evaluate(code, name, meta, values):
         if len(c) != meta["n_apps"] or (c and max(c) > n_values):
             raise procedures.ProcedureError(f"{name}: evaluate must return {meta['n_apps']} outcome indices in "
                                             f"0..{n_values}")
-    return {"slice": meta["slice"], "outcome": decl["outcome"], "params": params[1], "choices": meta["choices"],
+    return {"slice": meta["slice"], "outcome": decl["outcome"], "by_segment": decl.get("by_segment"),
+            "params": params[1], "choices": meta["choices"],
             "default_codes": res[0], "codes": res[1], "sandbox_ms": round(ms, 1)}
 
 
@@ -246,14 +248,18 @@ def prepare_factors(run_file, code, cache_dir):
 
 
 def attribute(code, name, prep, out_file):
-    """Causes of every decision flip over the declared ``factors`` ``{name: {"label", "inputs"}}``.
+    """Causes of every decision flip over the declared ``factors`` ``{name: {"label", "inputs", "hint"?,
+    "strategy"?}}``.
 
     For every subset of factors the procedure re-decides with those factors' inputs taken from BEFORE and all other
-    inputs from AFTER (defaults for params). A subset *reverts* an application when it brings back the BEFORE outcome;
-    the application's cause is the set of its minimal reverting subsets: ``[[a]]`` = factor a alone (every reverting
-    subset contains it), ``[[a, b]]`` = only a and b together, ``[[a], [b]]`` = either one suffices, ``[]`` = no
-    subset reverts (changes outside the factors), ``None`` = the procedure does not reproduce the AFTER outcome.
-    Every flipped application gets exactly one cause. Writes ``out_file``; returns the number of flips and causes.
+    inputs from AFTER (defaults for params). A factor with ``"strategy": false`` (input data) is never a cause. A flip
+    gets the one strategy factor whose restoring alone brings back the BEFORE outcome; when none does on the AFTER
+    input, the same test runs with the input factors restored too. Otherwise the cause is ``input`` (restoring the
+    input alone reverts it: no strategy change), ``several`` (no single strategy factor or several of them revert it)
+    or ``unreproduced`` (the procedure does not reproduce the AFTER outcome). Every flip gets exactly one cause.
+    ``fidelity`` is the share of all applications whose AFTER outcome the procedure reproduces: causes come from an
+    emulation of the strategy, so the report shows them only at 1.0. Writes ``out_file``; returns the number of flips
+    and causes.
     """
     decl = declaration(code, name)
     factors = decl.get("factors") or {}
@@ -271,41 +277,45 @@ def attribute(code, name, prep, out_file):
     codes = np.stack([np.frombuffer(base64.b64decode(r, validate=True), np.uint8) for r in res])
     if codes.shape[1] != len(after):
         raise procedures.ProcedureError(f"{name}: evaluate must return {len(after)} outcome indices")
-    key = minimal_subsets(codes == before)
+    strategy = [j for j, f in enumerate(names) if factors[f].get("strategy", True)]
+    data = sum(1 << j for j, f in enumerate(names) if not factors[f].get("strategy", True))
+    key = single_causes(codes == before, strategy, data)
     flips = np.flatnonzero(after != before)
     groups = {}
     for i in flips:
-        groups.setdefault(None if codes[0, i] != after[i] else int(key[i]), []).append(prep["app_ids"][i])
-    labels = [factors[f].get("label", f) for f in names]
-    causes = []
-    for k, ids in sorted(groups.items(), key=lambda g: (g[0] is None, g[0] == 0, -len(g[1]))):
-        sets = None if k is None else [[j for j in range(len(names)) if m >> j & 1] for m in range(1, 1 << len(names))
-                                       if k >> m & 1]
-        causes.append({"key": "unreproduced" if sets is None else "|".join("+".join(names[j] for j in s) for s in sets)
-                       or "other",
-                       "label": "процедура не воспроизводит решение" if sets is None else
-                       " или ".join(" + ".join(labels[j] for j in s) for s in sets) or "изменения вне факторов",
-                       "sets": sets and [[names[j] for j in s] for s in sets], "app_ids": ids})
+        groups.setdefault("unreproduced" if codes[0, i] != after[i] else
+                          names[key[i]] if key[i] >= 0 else META[key[i]][0], []).append(prep["app_ids"][i])
+    meta = {**dict(META.values()), "unreproduced": "процедура не воспроизводит решение"}
+    causes = [{"key": k, "label": factors[k].get("label", k) if k in factors else meta[k],
+               "hint": factors[k].get("hint") if k in factors else None, "app_ids": ids}
+              for k, ids in sorted(groups.items(), key=lambda g: (g[0] in meta, -len(g[1])))]
     out = Path(out_file)
     tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
-    tmp.write_bytes(orjson.dumps({"factors": [{"name": f, "label": lb} for f, lb in zip(names, labels)],
-                                  "flips": len(flips), "sandbox_ms": round(ms, 1), "causes": causes}))
+    tmp.write_bytes(orjson.dumps({"factors": [{"name": f, "label": factors[f].get("label", f),
+                                               "strategy": factors[f].get("strategy", True)} for f in names],
+                                  "flips": len(flips), "fidelity": round(float(np.mean(codes[0] == after)), 4)
+                                  if len(after) else 1.0, "sandbox_ms": round(ms, 1), "causes": causes}))
     tmp.replace(out)
     return {"flips": len(flips), "causes": len(causes)}
 
 
-def minimal_subsets(rev):
-    """Bit ``m`` of each application's key is set when factor subset ``m`` reverts it and no proper subset does;
-    ``rev`` is ``(2**k, n)`` booleans indexed by subset bitmask."""
-    k = rev.shape[0].bit_length() - 1
-    reach, key = rev.copy(), np.zeros(rev.shape[1], np.uint64)
-    for m in range(1, 1 << k):
-        below = np.zeros(rev.shape[1], bool)
-        for j in range(k):
-            if m >> j & 1:
-                below |= reach[m ^ (1 << j)]
-        key |= (rev[m] & ~below).astype(np.uint64) << np.uint64(m)
-        reach[m] |= below
+META = {-1: ("input", "без изменения стратегии"), -2: ("several", "несколько изменений сразу")}
+
+
+def single_causes(rev, strategy, data):
+    """Per application the index of the only strategy factor whose restoring alone reverts it (``rev`` is ``(2**k,
+    n)`` booleans indexed by subset bitmask), first on the AFTER input, then with the ``data`` mask restored;
+    ``-1`` when restoring the input alone reverts it, ``-2`` when no single strategy factor or several do."""
+    key = np.full(rev.shape[1], -2, np.int8)
+    todo = np.ones(rev.shape[1], bool)
+    for base in (0, data) if data else (0,):
+        if base:
+            key[todo & rev[base]] = -1
+            todo &= ~rev[base]
+        hits = np.stack([rev[base | 1 << j] for j in strategy]) if strategy else np.zeros((0, rev.shape[1]), bool)
+        one = todo & (hits.sum(0) == 1)
+        key[one] = np.asarray(strategy)[hits.argmax(0)][one]
+        todo &= hits.sum(0) == 0
     return key
 
 
@@ -327,7 +337,8 @@ def _bitmaps(codes, k):
 
 
 def metrics(rep, res, spec, max_values=50, top=30, max_ids=500):
-    """Approval rate, swaps, fidelity and per-segment deltas of a what-if result under scope ``spec``.
+    """Approval rate, swaps, fidelity and per-segment deltas of a what-if result under scope ``spec``; with the
+    declaration's ``by_segment`` field only that field's values, all of them (e.g. one row per product).
 
     ``moved_ids`` lists the first ``max_ids`` applications whose decision would move, so the number drills into the
     application list; the cap keeps the id list small enough for a URL scope (``moved`` is always exact).
@@ -355,8 +366,9 @@ def metrics(rep, res, spec, max_values=50, top=30, max_ids=500):
                 for i, w in enumerate(new) if (c := len(b & w & s))]
 
     segs = []
+    by = res.get("by_segment")
     for f, vals in sorted(rep.seg.items()):
-        if len(vals) > max_values:
+        if len(vals) > max_values or by and f != by:
             continue
         for v, bm in vals.items():
             b = bm & s
@@ -371,4 +383,4 @@ def metrics(rep, res, spec, max_values=50, top=30, max_ids=500):
                               "after": rate(after.get(values[pos], BitMap())), "whatif": rate(new[pos])},
             "moved": len(moved), "moved_ids": [rep.app_id[i] for i in itertools.islice(moved, max_ids)],
             "swap_vs_before": swap(before), "swap_vs_after": swap(after),
-            "segments": segs[:top]}
+            "by_segment": by, "segments": segs if by else segs[:top]}

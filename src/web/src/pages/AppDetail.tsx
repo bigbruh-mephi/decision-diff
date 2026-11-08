@@ -10,7 +10,8 @@ export function AppDetailPage() {
   const { path, scope } = useSearch({ strict: false }) as { path?: string; scope?: string };
   const app = useQuery({ queryKey: ["app", runId, appId], queryFn: () => api.get<AppDetail>(`/api/runs/${runId}/apps/${encodeURIComponent(appId)}`) });
   const summary = useQuery({ queryKey: ["summary", runId, ""], queryFn: () => api.get<Summary>(`/api/runs/${runId}/summary`) });
-  const [showSame, setShowSame] = useState(false);
+  const [showSame, setShowSame] = useState(true);
+  const [view, setView] = useState<"doc" | "table">("doc");
   const [q, setQ] = useState(path ?? "");
   const groups = useMemo(() => {
     const rows = (app.data?.rows ?? []).filter((r) => (showSame || r.CHANGE_TYPE !== "SAME" || r.PATH === path) && (!q || r.PATH.includes(q) || r.ARRAY_KEY.includes(q)));
@@ -50,10 +51,15 @@ export function AppDetailPage() {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Card>
           <CardHeader
-            title="BEFORE / AFTER по атрибутам"
-            hint="Горизонтальное представление только для просмотра; хранение витрины вертикальное"
+            title="BEFORE / AFTER"
+            hint={view === "doc" ? "Документ до и после, выровненный построчно: изменившиеся строки подсвечены" : "Атрибуты по группам; хранение витрины вертикальное"}
             actions={
               <div className="flex flex-wrap items-center gap-2">
+                <div className="flex overflow-hidden rounded border border-line-strong text-xs" role="tablist" aria-label="Вид сравнения">
+                  {(["doc", "table"] as const).map((v) => (
+                    <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)} className={cx("px-2 py-1", view === v ? "bg-accent text-white" : "hover:bg-surface-2")}>{v === "doc" ? "Документ" : "Таблица"}</button>
+                  ))}
+                </div>
                 <input className={inputCls + " h-7 w-56 text-xs"} placeholder="фильтр по пути или ключу" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Фильтр атрибутов" />
                 <label className="flex items-center gap-1 text-xs text-muted">
                   <input type="checkbox" checked={showSame} onChange={(e) => setShowSame(e.target.checked)} /> показать {n(same)} без изменений
@@ -61,7 +67,7 @@ export function AppDetailPage() {
               </div>
             }
           />
-          <div className="overflow-x-auto">
+          {view === "doc" ? <DocDiff groups={groups} path={path} /> : <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-surface text-left text-xs text-muted">
                 <tr className="border-b border-line">
@@ -96,7 +102,7 @@ export function AppDetailPage() {
                 </tbody>
               ))}
             </table>
-          </div>
+          </div>}
         </Card>
         <div className="flex flex-col gap-4">
           <Card>
@@ -127,6 +133,47 @@ export function AppDetailPage() {
           </Card>
         </div>
       </div>
+    </div>
+  );
+}
+
+type DocRow = AppDetail["rows"][number];
+
+function DocDiff({ groups, path }: { groups: [string, DocRow[]][]; path?: string }) {
+  const lines: { key: string; head?: string; r?: DocRow }[] = [];
+  for (const [g, rows] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+    const byElem = new Map<string, DocRow[]>();
+    for (const r of rows) byElem.set(r.ARRAY_KEY, [...(byElem.get(r.ARRAY_KEY) ?? []), r]);
+    for (const [ak, rs] of [...byElem.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push({ key: g + ak, head: ak ? `${g} [${ak}]` : g });
+      for (const r of rs.sort((x, y) => `${x.SUFFIX}.${x.KEY}`.localeCompare(`${y.SUFFIX}.${y.KEY}`))) lines.push({ key: g + ak + r.path_id, r });
+    }
+  }
+  const side = (r: DocRow, v: string | null, tone: string) => (
+    <td className={cx("w-1/2 border-l border-line px-3 py-0.5 align-top font-mono", v === null ? "bg-surface-2" : r.CHANGE_TYPE !== "SAME" && tone, path && r.PATH === path && "outline outline-1 outline-accent")}>
+      {v !== null && <><span className="text-muted">{r.SUFFIX ? `${r.SUFFIX}.` : ""}{r.KEY || "(элемент)"}: </span><span className="break-all">{v}</span></>}
+    </td>
+  );
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full table-fixed text-xs">
+        <thead className="text-left text-xs">
+          <tr className="border-b border-line"><th className="px-3 py-2 font-medium text-before">BEFORE</th><th className="border-l border-line px-3 py-2 font-medium text-after">AFTER</th></tr>
+        </thead>
+        <tbody>
+          {lines.map((l) =>
+            l.head ? (
+              <tr key={l.key}><td colSpan={2} className="bg-surface-2 px-3 py-1 font-mono text-[11px] font-medium text-muted">{l.head}</td></tr>
+            ) : (
+              <tr key={l.key} className="border-b border-line/60">
+                {side(l.r!, l.r!.VALUE_BEFORE, "bg-fail-bg text-fail")}
+                {side(l.r!, l.r!.VALUE_AFTER, "bg-pass-bg text-pass")}
+              </tr>
+            ),
+          )}
+          {!lines.length && <tr><td colSpan={2} className="px-3 py-4 text-muted">Нет атрибутов по фильтру</td></tr>}
+        </tbody>
+      </table>
     </div>
   );
 }

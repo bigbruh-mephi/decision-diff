@@ -15,6 +15,12 @@ Kinds and entrypoints:
   matching glob wins; roles ``input | reference | logic | outcome``.
 - ``whatif``: ``entrypoint(data, params) -> array[n_apps]`` of outcome indices over arrays the app prepares from the
   declared ``unit_depth``, ``inputs`` and ``outcome``; ``params`` declares the user controls (see ``whatif.py``).
+- ``parser``: ``entrypoint(name, data: bytes, params) -> iterable of (app_id, document)`` replaces the built-in format
+  detection for every input file of the run; runs inside the chunk sandbox like any user code.
+- ``step``: ``entrypoint(doc, params) -> doc``; the run's ordered steps transform every parsed document (BEFORE and
+  AFTER) before normalization, inside the chunk sandbox.
+- ``ai_prompt``: params only (``system``, ``call1``, ``call2`` prompt texts of the AI reviewer); read as literals,
+  never executed (see ``ai.prompts``).
 """
 
 import contextlib
@@ -22,7 +28,7 @@ import hashlib
 import types
 from pathlib import Path
 
-KINDS = ("normalize", "compare", "segments", "facts", "check", "lineage", "whatif")
+KINDS = ("normalize", "compare", "segments", "facts", "check", "lineage", "whatif", "parser", "step", "ai_prompt")
 CHECK_FIELDS = ("LABEL", "SOURCE", "ARGUMENT", "CNT", "TOTAL", "METRIC", "APP_IDS", "RESULT", "CONFIDENCE")
 
 
@@ -49,7 +55,7 @@ def load(code, name="<workspace>", kind=None):
     missing = [k for k in ("id", "label") if not spec.get(k)]
     if missing:
         raise ProcedureError(f"{name}: не заполнены поля {', '.join(missing)}")
-    if spec["kind"] in ("segments", "facts", "check", "whatif") and not callable(spec.get("entrypoint")):
+    if spec["kind"] in ("segments", "facts", "check", "whatif", "parser", "step") and not callable(spec.get("entrypoint")):
         raise ProcedureError(f"{name}: процедуре вида {spec['kind']!r} нужна функция entrypoint")
     spec.setdefault("params", {})
     spec["code"], spec["sha"] = code, hashlib.sha256(code.encode()).hexdigest()[:16]
@@ -115,6 +121,19 @@ def declaration(code, name="<workspace>"):
     if var is None:
         raise ProcedureError(f"{name}: модуль должен присвоить PROCEDURE или CHECK словарь-литерал {{...}}")
     return var, found[var]
+
+
+def describe(code, name="<workspace>"):
+    """``(contract id, description)`` read WITHOUT executing the code: the contract's ``description`` entry, else the
+    first paragraph of the module docstring; ``(None, "")`` for code that does not declare a contract."""
+    import ast
+
+    try:
+        meta = declaration(code, name)[1]
+        doc = meta.get("description") or (ast.get_docstring(ast.parse(code)) or "").split("\n\n")[0]
+    except ProcedureError:
+        return None, ""
+    return meta.get("id"), " ".join(str(doc).split())
 
 
 def inspect_source(code, name="<workspace>"):

@@ -7,7 +7,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from . import db
+from . import ai, db
 from .engine import procedures
 
 log = logging.getLogger("dd.catalog")
@@ -61,8 +61,20 @@ async def sync_changed(c, root):
 
 
 async def save_workspace(c, owner_id, code, proc_id=None):
-    """Create or update a workspace procedure from code; validation errors raise ProcedureError."""
+    """Create or update a workspace procedure from code; validation errors raise ProcedureError.
+
+    Without ``proc_id`` the owner's workspace procedure with the same kind and contract id gets a new version, so
+    saving an edited shipped file yields one "my version" that replaces the file in new runs."""
     spec = procedures.inspect_source(code)
+    if spec["kind"] == "ai_prompt":
+        ai.prompts(code)
+    if not proc_id:
+        for r in await (await c.execute("""SELECT p.id, v.code FROM procedures p JOIN code_versions v ON v.sha = p.sha
+                                           WHERE p.owner_id = %s AND p.origin = 'workspace' AND p.kind = %s""",
+                                        (owner_id, spec["kind"]))).fetchall():
+            if procedures.describe(r["code"])[0] == spec["id"]:
+                proc_id = r["id"]
+                break
     await db.store_code(c, spec["kind"], spec["id"], code, spec["sha"])
     if proc_id:
         row = await (await c.execute("""
@@ -77,7 +89,8 @@ async def save_workspace(c, owner_id, code, proc_id=None):
 
 
 async def snapshot(c, selection, params=None, owner_id=None):
-    """Freeze ``{"normalize": id, "compare": id, "segments": id, "checks": [ids]}`` into code shas for a run.
+    """Freeze ``{"normalize": id, "compare": id, "segments": id, "checks": [ids]}`` (optional ``lineage``, ``parser``,
+    ``ai_prompt``, ``whatif``, ordered ``steps``) into code shas for a run; the AI prompts are validated here, before the run starts.
 
     Only placed files and the owner's own workspace procedures can be selected. ``whatif`` (attribution of decision
     flips at finalize) defaults to the procedure the what-if tab opens with: the most recently updated one.
@@ -94,8 +107,11 @@ async def snapshot(c, selection, params=None, owner_id=None):
         return {"sha": row["sha"], "params": params.get(str(pid), {})}
 
     snap = {k: await one(selection[k], k) for k in ("normalize", "compare", "segments")}
-    if selection.get("lineage"):
-        snap["lineage"] = await one(selection["lineage"], "lineage")
+    for kind in ("lineage", "parser", "ai_prompt"):
+        if selection.get(kind):
+            snap[kind] = await one(selection[kind], kind)
+    if "ai_prompt" in snap:
+        ai.prompts((await db.code(c, snap["ai_prompt"]["sha"]))["code"], snap["ai_prompt"]["params"])
     whatif = selection.get("whatif")
     if not whatif:
         row = await (await c.execute("""SELECT id FROM procedures WHERE kind = 'whatif'
@@ -104,5 +120,6 @@ async def snapshot(c, selection, params=None, owner_id=None):
         whatif = row and row["id"]
     if whatif:
         snap["whatif"] = await one(whatif, "whatif")
+    snap["steps"] = [await one(pid, "step") for pid in selection.get("steps", [])]
     snap["checks"] = [await one(pid, "check") for pid in selection.get("checks", [])]
     return snap

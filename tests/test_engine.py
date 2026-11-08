@@ -1,5 +1,6 @@
 import json
 import random
+from pathlib import Path
 
 import pytest
 
@@ -138,3 +139,51 @@ def test_declaration_resolves_module_level_literal_params():
     code = 'DEFAULTS = {"min_share": 0.05}\n\ndef run(mart, params=None):\n    return []\n\n' \
            'CHECK = {"id": "c", "label": "c", "params": DEFAULTS, "entrypoint": run}\n'
     assert procedures.declaration(code)[1] == {"id": "c", "label": "c", "params": {"min_share": 0.05}}
+
+
+def test_user_parser_procedure_parses_a_run_folder(tmp_path):
+    from decision_diff import pipeline
+
+    for side, city, limit in (("BEFORE", "Omsk", "100"), ("AFTER", "Tomsk", "100")):
+        d = tmp_path / "RESULTS" / side
+        d.mkdir(parents=True)
+        (d / "A1.kv").write_text(f"# comment\nclient.address.city={city}\nlimit={limit}\n")
+        (d / "A2.kv").write_text("limit=7.5\n")
+    snaps = {k: {"sha": k, "name": f"{k}.py", "kind": k, "params": {},
+                 "code": f'PROCEDURE = {{"id": "{k}", "label": "{k}", "kind": "{k}", "params": {{}}}}'}
+             for k in ("normalize", "compare")}
+    snaps["segments"] = {"sha": "s", "name": "s.py", "kind": "segments", "params": {}, "code":
+                         'PROCEDURE = {"id": "s", "label": "s", "kind": "segments", "entrypoint": lambda b, a, p: {}}'}
+    code = (Path(__file__).parents[1] / "procedures" / "parsers" / "kv_lines.py").read_text()
+    snaps["parser"] = {"sha": "p", "name": "kv_lines.py", "kind": "parser", "params": {}, "code": code}
+    zip_path = tmp_path / "in" / "chunk-0.zip"
+    pipeline.cut_chunk(pipeline.list_pairs(tmp_path), zip_path)
+    stats, stages = pipeline._chunk_body(str(zip_path), str(tmp_path / "out"), snaps)
+    assert stats["apps"] == 2 and stats["changed_apps"] == 1 and stages[0]["code_sha"]
+    import pyarrow.parquet as pq
+
+    mart = pq.read_table(tmp_path / "out" / "mart.parquet").to_pylist()
+    city = {r["SOURCE"]: r["VALUE"] for r in mart if r["APP_ID"] == "A1" and "city" in r["JSONPATH"]}
+    assert city == {"BEFORE": "Omsk", "AFTER": "Tomsk"}
+    assert {r["VALUE"] for r in mart if r["APP_ID"] == "A2"} == {"7.5"}
+    step = ('def run(doc, params):\n    doc["limit"] = str(doc.get("limit")) + params["suffix"]\n    return doc\n'
+            'PROCEDURE = {"id": "%s", "label": "s", "kind": "step", "params": {"suffix": "%s"}, "entrypoint": run}')
+    snaps["steps"] = [{"sha": i, "name": i, "kind": "step", "params": {}, "code": step % (i, i)} for i in ("x", "y")]
+    stats, stages = pipeline._chunk_body(str(zip_path), str(tmp_path / "out3"), snaps)
+    mart = pq.read_table(tmp_path / "out3" / "mart.parquet").to_pylist()
+    assert {r["VALUE"] for r in mart if r["APP_ID"] == "A2"} == {"7.5xy"}
+    assert [s["stage"] for s in stages[:3]] == ["parse", "step:x", "step:y"]
+    snaps.pop("steps")
+    (tmp_path / "RESULTS" / "AFTER" / "A2.kv").write_text("no separator here\n")
+    pipeline.cut_chunk(pipeline.list_pairs(tmp_path), zip_path)
+    with pytest.raises(procedures.ProcedureError, match="kv_lines: разбор файла A2.kv: ValueError: строка 1"):
+        pipeline._chunk_body(str(zip_path), str(tmp_path / "out2"), snaps)
+
+
+def test_describe_reads_description_or_docstring_without_running_code():
+    root = Path(__file__).parents[1] / "procedures"
+    cid, text = procedures.describe((root / "spr_normalize.py").read_text())
+    assert cid == "spr_normalize" and text.startswith("Как разложить ответ на атрибуты")
+    assert procedures.describe('"""Первый абзац.\n\nВторой."""\nimport os\nos.exit(1)\n'
+                               'PROCEDURE = {"id": "x", "label": "x", "kind": "compare"}') == ("x", "Первый абзац.")
+    assert procedures.describe("x = 1") == (None, "")

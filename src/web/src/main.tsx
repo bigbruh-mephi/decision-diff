@@ -99,6 +99,7 @@ const runRoute = createRoute({
     tab: (s.tab as RunSearch["tab"]) ?? undefined,
     scope: typeof s.scope === "string" ? s.scope : s.scope ? JSON.stringify(s.scope) : undefined,
     drill: typeof s.drill === "string" ? s.drill : s.drill ? JSON.stringify(s.drill) : undefined,
+    pv: typeof s.pv === "string" ? s.pv : s.pv ? JSON.stringify(s.pv) : undefined,
   }),
   component: RunPage,
 });

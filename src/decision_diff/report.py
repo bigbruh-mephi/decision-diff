@@ -55,9 +55,6 @@ class RunReport:
         self.transitions = {}
         for pid, vb, va, apps in q.execute("SELECT path_id, VALUE_BEFORE, VALUE_AFTER, APPS FROM transitions").fetchall():
             self.transitions.setdefault(pid, []).append((vb, va, BitMap.deserialize(apps)))
-        self.structure = [dict(zip(("path_id", "PATH", "PREFIX", "apps_new", "apps_lost", "apps_type_changed",
-                                    "apps_before", "apps_after"), r)) for r in q.execute(
-            "SELECT * FROM structure ORDER BY apps_new + apps_lost DESC").fetchall()]
         self.changed = BitMap.union(*(c["apps"] for c in self.clusters)) if self.clusters else BitMap()
         dec = self.params.get("decision_field", "DECISION")
         self.dec_before, self.dec_after = self.seg.get(f"{dec}_BEFORE", {}), self.seg.get(f"{dec}_AFTER", {})
@@ -77,8 +74,10 @@ class RunReport:
             per[i] = rows
         self.dir, self.check_ids = Path(path).parent, {}
         f = self.dir / "attribution.json"
+        att = orjson.loads(f.read_bytes()) if f.is_file() else {"causes": []}
+        self.causes_fidelity = att.get("fidelity")
         self.causes = [{**c, "apps": BitMap(self.app_ord[a] for a in c.pop("app_ids") if a in self.app_ord)}
-                       for c in (orjson.loads(f.read_bytes())["causes"] if f.is_file() else [])]
+                       for c in att["causes"] if self.causes_fidelity == 1]
         self.lock = threading.Lock()
 
     def check_apps(self, sha):
@@ -150,7 +149,8 @@ class RunReport:
                 "approval_before": rate(self.dec_before), "approval_after": rate(self.dec_after),
                 "input_driven": len(BitMap.union(BitMap(), *(c["apps"] for c in self.clusters
                                                              if self._origin(c) == "input")) & s),
-                "swap": swap, "issues": self.issue_rows(s)}
+                "swap": swap, "issues": self.issue_rows(s), "labels": self.params.get("labels") or {},
+                "causes_fidelity": self.causes_fidelity}
 
     def _origin(self, c):
         """``input`` when the cluster's changes include input-data paths (the lineage's input stages, else the
@@ -175,7 +175,7 @@ class RunReport:
                                         for n, p, vb, va in trans],
                         "swap": [{"before": vb, "after": va, "apps": n} for vb, b in self.dec_before.items()
                                  for va, a in self.dec_after.items() if vb != va and (n := len(b & a & apps))],
-                        "causes": sorted(({"key": x["key"], "label": x["label"], "apps": n}
+                        "causes": sorted(({"key": x["key"], "label": x["label"], "hint": x.get("hint"), "apps": n}
                                           for x in self.causes if (n := len(x["apps"] & apps))),
                                          key=lambda x: -x["apps"])})
         out.sort(key=lambda r: -r["apps"])

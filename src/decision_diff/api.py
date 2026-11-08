@@ -15,13 +15,14 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated, Literal
 
 import orjson
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from . import auth, catalog, db, errors, export, queue
 from .engine import procedures
@@ -313,10 +314,18 @@ async def list_procedures(s=Depends(user)):
     async with pool().connection() as c:
         await catalog.sync_changed(c, settings.procedures_dir)
         rows = await (await c.execute("""
-            SELECT id, kind, name, origin, path, sha, updated_at, owner_id = %s AS mine FROM procedures
-            WHERE origin = 'file' OR owner_id = %s ORDER BY kind, origin, name""",
-                                      (s["user_id"], s["user_id"]))).fetchall()
-    return j(rows)
+            SELECT p.id, p.kind, p.name, p.origin, p.path, p.sha, p.updated_at, p.owner_id = %s AS mine, v.code
+            FROM procedures p JOIN code_versions v ON v.sha = p.sha WHERE p.origin = 'file' OR p.owner_id = %s
+            ORDER BY p.kind, p.origin DESC, p.updated_at DESC, p.name""", (s["user_id"], s["user_id"]))).fetchall()
+    for r in rows:
+        code = r.pop("code")
+        r["cid"], r["description"] = _DESCRIBED.get(r["sha"]) or _DESCRIBED.setdefault(r["sha"],
+                                                                                    procedures.describe(code))
+    mine = {(r["kind"], r["cid"]) for r in rows if r["origin"] == "workspace"}
+    return j([{**r, "overridden": r["origin"] == "file" and (r["kind"], r["cid"]) in mine} for r in rows])
+
+
+_DESCRIBED = {}
 
 
 @app.get("/api/procedures/{pid}")
@@ -398,6 +407,9 @@ class Selection(BaseModel):
     segments: uuid.UUID
     lineage: uuid.UUID | None = None
     whatif: uuid.UUID | None = None
+    parser: uuid.UUID | None = None
+    ai_prompt: uuid.UUID | None = None
+    steps: list[uuid.UUID] = []
     checks: list[uuid.UUID] = []
 
 
@@ -696,7 +708,7 @@ async def summary(run_id: uuid.UUID, request: Request, s=Depends(session)):
     spec = _scope(request)
     return _cached(request, run_id, "summary", lambda: {
         **rep.summary(spec), "run": {"id": row["id"], "name": row["name"], "stats": row["stats"]},
-        "structure": rep.structure[:50], "clusters": rep.cluster_rows(spec)})
+        "clusters": rep.cluster_rows(spec)})
 
 
 @app.get("/api/runs/{run_id}/clusters")
@@ -732,10 +744,28 @@ async def fields(run_id: uuid.UUID, request: Request, s=Depends(session)):
     return _cached(request, run_id, "fields", build)
 
 
-class PivotBody(BaseModel):
-    rows: list[str] = Field(default=[], max_length=8)
-    cols: list[str] = Field(default=[], max_length=4)
-    filters: dict[str, list[str]] = {}
+Dim = Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+class Layout(BaseModel):
+    """Pivot layout: the same limits guard a live pivot request and a stored template."""
+
+    rows: list[Dim] = Field(default=[], max_length=8)
+    cols: list[Dim] = Field(default=[], max_length=4)
+    filters: dict[Dim, list[Annotated[str, StringConstraints(max_length=1000)]]] = Field(default={}, max_length=32)
+    mode: Literal["count", "row", "col", "total"] = "count"
+
+    @model_validator(mode="after")
+    def _distinct(self):
+        dims = self.rows + self.cols
+        if len(set(dims)) != len(dims):
+            raise ValueError("an axis field is used twice")
+        if any(len(v) > 500 for v in self.filters.values()):
+            raise ValueError("too many filter values")
+        return self
+
+
+class PivotBody(Layout):
     scope: dict = {}
 
 
@@ -745,6 +775,68 @@ async def pivot(run_id: uuid.UUID, body: PivotBody, s=Depends(session)):
     t0 = time.perf_counter()
     res = await asyncio.to_thread(rep.pivot, body.rows, body.cols, body.filters, body.scope)
     return j({**res, "ms": round((time.perf_counter() - t0) * 1000, 2)})
+
+
+class TemplateBody(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    layout: Layout
+    shared: bool = False
+
+
+MAX_TEMPLATES = 200
+
+
+@app.get("/api/pivot-templates")
+async def list_templates(s=Depends(session)):
+    """The user's own pivot templates and the ones others shared; a share-link viewer has none."""
+    if s["user_id"] is None:
+        return j([])
+    async with pool().connection() as c:
+        rows = await (await c.execute("""
+            SELECT t.id, t.name, t.layout, t.shared, t.created_at, t.owner_id = %s AS mine, u.login AS owner
+            FROM pivot_templates t JOIN users u ON u.id = t.owner_id
+            WHERE t.owner_id = %s OR t.shared ORDER BY mine DESC, lower(t.name)""",
+                                      (s["user_id"], s["user_id"]))).fetchall()
+    return j(rows)
+
+
+@app.post("/api/pivot-templates")
+async def create_template(body: TemplateBody, s=Depends(user)):
+    async with pool().connection() as c:
+        n = (await (await c.execute("SELECT count(*) AS n FROM pivot_templates WHERE owner_id = %s",
+                                    (s["user_id"],))).fetchone())["n"]
+        if n >= MAX_TEMPLATES:
+            raise errors.Problem(409, "too_many_templates", f"Сохранено уже {MAX_TEMPLATES} шаблонов. Удалите ненужные "
+                                                            "и повторите.")
+        row = await (await c.execute("""
+            INSERT INTO pivot_templates (owner_id, name, layout, shared) VALUES (%s, %s, %s, %s)
+            RETURNING id, name, layout, shared, created_at, true AS mine""",
+                                     (s["user_id"], body.name, Jsonb(body.layout.model_dump()), body.shared))).fetchone()
+    return j(row)
+
+
+@app.put("/api/pivot-templates/{tid}")
+async def update_template(tid: uuid.UUID, body: TemplateBody, s=Depends(user)):
+    async with pool().connection() as c:
+        row = await (await c.execute("""
+            UPDATE pivot_templates SET name = %s, layout = %s, shared = %s WHERE id = %s AND owner_id = %s
+            RETURNING id, name, layout, shared, created_at, true AS mine""",
+                                     (body.name, Jsonb(body.layout.model_dump()), body.shared, tid,
+                                      s["user_id"]))).fetchone()
+    if not row:
+        raise errors.Problem(404, "template_not_found", "Шаблон не найден: возможно, его удалили или он принадлежит "
+                                                        "другому пользователю.")
+    return j(row)
+
+
+@app.delete("/api/pivot-templates/{tid}", status_code=204)
+async def delete_template(tid: uuid.UUID, s=Depends(user)):
+    async with pool().connection() as c:
+        cur = await c.execute("DELETE FROM pivot_templates WHERE id = %s AND owner_id = %s", (tid, s["user_id"]))
+    if not cur.rowcount:
+        raise errors.Problem(404, "template_not_found", "Шаблон не найден: возможно, его удалили или он принадлежит "
+                                                        "другому пользователю.")
+    return Response(status_code=204)
 
 
 class CellBody(BaseModel):

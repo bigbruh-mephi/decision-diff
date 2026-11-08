@@ -5,33 +5,7 @@ import { CodeView } from "../components/CodeView";
 import { Badge, Button, Card, CardHeader, ErrorBox, Mono, inputCls } from "../components/ui";
 import { ApiError, api, type CellResult, type CheckResult, type Procedure, type Run } from "../lib/api";
 import { KIND, dt, plural } from "../lib/format";
-
-const checkTemplate = () => `# %% Новая автопроверка: контракт CHECK = {id, label, params, entrypoint}
-DEFAULTS = {"min_share": 0.05, "low_confidence_cnt": 5, "app_ids_limit": 20}
-
-
-def run(mart, params=None):
-    """Доля заявок, у которых различия есть, но решение не изменилось."""
-    p = {**DEFAULTS, **(params or {})}
-    total = mart.total_apps()
-    changed = set(mart.app_ids(diff_flag=1))
-    flipped = {s["APP_ID"] for s in mart.segments() if s.get("DECISION_CHANGED")}
-    passed_by = sorted(changed - flipped)
-    share = len(passed_by) / total if total else 0.0
-    return [{
-        "LABEL": CHECK["label"], "SOURCE": "AFTER", "ARGUMENT": "",
-        "CNT": len(passed_by), "TOTAL": total, "METRIC": round(share, 4),
-        "APP_IDS": passed_by[:p["app_ids_limit"]],
-        "RESULT": "FAIL" if share > p["min_share"] else "PASS",
-        "CONFIDENCE": "LOW" if len(passed_by) < p["low_confidence_cnt"] else "HIGH",
-    }]
-
-
-CHECK = {"id": "changed_same_decision_${Math.random().toString(36).slice(2, 7)}", "label": "Различия есть, решение то же", "params": DEFAULTS, "entrypoint": run}
-
-# %% Попробовать на прогоне: последнее выражение ячейки показывается таблицей
-run(mart)
-`;
+import { TEMPLATES, template } from "../lib/templates";
 
 function cells(code: string) {
   const lines = code.split("\n");
@@ -74,6 +48,9 @@ function Output({ res }: { res: CellResult }) {
   );
 }
 
+const STAGE_ORDER = ["parser", "step", "normalize", "compare", "segments", "lineage", "whatif", "facts", "check", "ai_prompt"];
+const STAGE_TITLE: Record<string, string> = { parser: "1. Разбор формата", step: "2. Подготовка документов", normalize: "3. Приведение", compare: "4. Сравнение", segments: "5. Разрезы отчета", lineage: "6. Цепочка этапов", whatif: "7. Модель решения", facts: "Факты отчета", check: "8. Автопроверки", ai_prompt: "9. Мнение ИИ" };
+
 export function WorkspacePage() {
   const { run: runParam, proc } = useSearch({ strict: false }) as { run?: string; proc?: string };
   const nav = useNavigate();
@@ -82,7 +59,7 @@ export function WorkspacePage() {
   const runs = useQuery({ queryKey: ["runs"], queryFn: () => api.get<Run[]>("/api/runs") });
   const done = (runs.data ?? []).filter((r) => r.state === "done");
   const [runId, setRunId] = useState(runParam ?? "");
-  const [code, setCode] = useState(checkTemplate);
+  const [code, setCode] = useState(() => template("check"));
   const [current, setCurrent] = useState<Procedure | null>(null);
   const [results, setResults] = useState<Record<number, CellResult>>({});
   const [msg, setMsg] = useState<string | null>(null);
@@ -96,6 +73,8 @@ export function WorkspacePage() {
   const parts = useMemo(() => cells(code), [code]);
   const runChecks = useQuery({ queryKey: ["checks", runId], queryFn: () => api.get<CheckResult[]>(`/api/runs/${runId}/checks`), enabled: !!runId });
   const checkId = /^CHECK\s*=\s*\{[^}]*?["']id["']\s*:\s*["']([^"']+)["']/m.exec(code)?.[1];
+  const currentDesc = current && procs.data?.find((p) => p.id === current.id)?.description;
+  const isCheck = /^CHECK\s*=/m.test(code) || /["']kind["']\s*:\s*["']check["']/.test(code);
   const taken = checkId && runChecks.data?.find((c) => c.check_id === checkId);
 
   const runCell = async (upto: number) => {
@@ -125,7 +104,7 @@ export function WorkspacePage() {
     },
     onSuccess: (p) => {
       setCurrent(p);
-      setMsg(`Сохранено: ${p.name} (${p.kind}), версия ${p.sha.slice(0, 7)}`);
+      setMsg(`Сохранено: ${p.name} (${KIND[p.kind] ?? p.kind}), версия ${p.sha.slice(0, 7)}. Новые прогоны используют эту версию по умолчанию`);
       qc.invalidateQueries({ queryKey: ["procedures"] });
       nav({ to: "/workspace", search: { run: runId || undefined, proc: p.id }, replace: true });
     },
@@ -141,18 +120,36 @@ export function WorkspacePage() {
   return (
     <div className="grid gap-4 xl:grid-cols-[260px_1fr]">
       <Card className="h-fit">
-        <CardHeader title="Процедуры" hint="📄 файлы в системе · ✎ рабочая область" actions={<Button size="sm" onClick={() => { setCurrent(null); setCode(checkTemplate()); nav({ to: "/workspace", search: { run: runId || undefined } }); }}>Новая</Button>} />
-        <ul className="max-h-[70vh] overflow-y-auto py-1">
-          {(procs.data ?? []).map((p) => (
-            <li key={p.id}>
-              <Link to="/workspace" search={{ run: runId || undefined, proc: p.id }} className={"flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-2 " + (current?.id === p.id ? "bg-accent-bg" : "")}>
-                <span aria-hidden>{p.origin === "file" ? "📄" : "✎"}</span>
-                <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                <Badge>{KIND[p.kind] ?? p.kind}</Badge>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <CardHeader title="Конфигурация" hint="Алгоритмы по этапам. 📄 поставляемый файл · ✎ моя версия, ее берут новые прогоны" actions={
+            <select className={inputCls + " h-7 w-28 text-xs"} value="" aria-label="Новая процедура из шаблона" onChange={(e) => { if (!e.target.value) return; setCurrent(null); setCode(template(e.target.value)); setResults({}); setMsg(null); nav({ to: "/workspace", search: { run: runId || undefined } }); }}>
+              <option value="">Новая…</option>
+              {TEMPLATES.map((t) => <option key={t.kind} value={t.kind}>{t.title}</option>)}
+            </select>
+          } />
+        <div className="max-h-[75vh] overflow-y-auto py-1">
+          {STAGE_ORDER.map((kind) => {
+            const items = (procs.data ?? []).filter((p) => p.kind === kind);
+            return items.length ? (
+              <section key={kind}>
+                <h2 className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">{STAGE_TITLE[kind] ?? KIND[kind] ?? kind}</h2>
+                <ul>
+                  {items.map((p) => (
+                    <li key={p.id}>
+                      <Link to="/workspace" search={{ run: runId || undefined, proc: p.id }} title={p.description} className={"block px-3 py-1.5 text-xs hover:bg-surface-2 " + (current?.id === p.id ? "bg-accent-bg " : "") + (p.overridden ? "opacity-60" : "")}>
+                        <span className="flex items-center gap-2">
+                          <span aria-hidden>{p.origin === "file" ? "📄" : "✎"}</span>
+                          <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
+                          {p.overridden && <Badge>заменен</Badge>}
+                        </span>
+                        {p.description && <span className="mt-0.5 line-clamp-2 pl-6 text-muted">{p.description}</span>}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null;
+          })}
+        </div>
       </Card>
       <div className="flex min-w-0 flex-col gap-3">
         <Card>
@@ -160,6 +157,7 @@ export function WorkspacePage() {
             <h1 className="text-[13px] font-semibold">{current ? current.name : "Новая процедура"}</h1>
             {current && <Badge>{current.origin === "file" ? `файл ${current.path}` : "рабочая область"}</Badge>}
             {current && <Mono className="text-muted">версия {current.sha.slice(0, 7)}</Mono>}
+            {currentDesc && <p className="basis-full text-xs text-muted">{currentDesc}</p>}
             <div className="ml-auto flex max-w-full flex-wrap items-center gap-2">
               <select className={inputCls + " h-7 text-xs"} value={runId} onChange={(e) => setRunId(e.target.value)} aria-label="Прогон для запуска">
                 <option value="">без прогона</option>
@@ -168,8 +166,8 @@ export function WorkspacePage() {
                 ))}
               </select>
               <Button size="sm" onClick={() => runCell(parts.length - 1)} disabled={!runId}>Выполнить всё</Button>
-              <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>Сохранить</Button>
-              <Button size="sm" variant="primary" onClick={() => addToReport.mutate()} disabled={!runId || addToReport.isPending}>Применить к прогону</Button>
+              <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending} title={current?.origin === "file" ? "Файл в системе не меняется: сохраняется ваша версия, новые прогоны берут ее вместо файла" : undefined}>{current?.origin === "file" ? "Сохранить как мою версию" : "Сохранить"}</Button>
+              <Button size="sm" variant="primary" onClick={() => addToReport.mutate()} disabled={!runId || !isCheck || addToReport.isPending} title={isCheck ? undefined : "Применить к готовому прогону можно автопроверку; другие процедуры выбираются при запуске нового прогона"}>Применить к прогону</Button>
             </div>
           </div>
           {msg && <p className="border-b border-line bg-pass-bg px-4 py-1.5 text-xs text-pass">{msg}</p>}

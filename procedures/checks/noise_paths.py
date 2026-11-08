@@ -30,4 +30,5 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "noise_paths", "label": "Кандидаты в технические исключения", "params": DEFAULTS, "entrypoint": run}
+CHECK = {"id": "noise_paths", "label": "Кандидаты в технические исключения",
+         "description": "Атрибуты, которые различаются почти везде и всегда разными значениями: кандидаты в технические исключения.", "params": DEFAULTS, "entrypoint": run}

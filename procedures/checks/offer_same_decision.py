@@ -31,4 +31,5 @@ def run(mart, params=None):
     return rows
 
 
-CHECK = {"id": "offer_same_decision", "label": "Решение то же, оффер другой", "params": DEFAULTS, "entrypoint": run}
+CHECK = {"id": "offer_same_decision", "label": "Решение то же, оффер другой",
+         "description": "Заявки, где решение не изменилось, а предложенный продукт другой.", "params": DEFAULTS, "entrypoint": run}
