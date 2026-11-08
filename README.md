@@ -34,38 +34,83 @@ docker --version && docker compose version && git --version
 docker run --rm hello-world
 ```
 
-### 2. Поднимите приложение
+### 2. Получите код
 
 ```bash
 git clone https://github.com/bigbruh-mephi/decision-diff.git && cd decision-diff
-cp .env.example .env            # задайте пароли DD_ADMIN_PASSWORD, DD_PG_PASSWORD, DD_AMQP_PASSWORD
-mkdir -p datasets && cp -r /путь/к/RUN-20260827-0001 datasets/
-docker compose up -d --build    # первая сборка 3-10 минут, дальше секунды
-docker compose ps               # api, worker, postgres, rabbitmq: running / healthy
 ```
 
-Без паролей в `.env` compose остановится с подсказкой, какую переменную задать. Остановить: `docker compose down`
-(данные сохраняются в томах; `down -v` удалит их). Обновить после `git pull`: `docker compose up -d --build`.
+Без git: скачайте архив репозитория (Code → Download ZIP), распакуйте и перейдите в папку. Все команды ниже
+выполняются из корня проекта — там, где лежит `docker-compose.yaml`.
 
-Откройте http://localhost:8080 и войдите как `admin` с паролем `DD_ADMIN_PASSWORD` из `.env`. Остальные пользователи
-регистрируются на странице входа (`DD_OPEN_REGISTRATION=1`; в общей сети поставьте `0`). По адресу машины в сети
-приложение тоже работает, но без HTTPS сессия передаётся открыто.
-
-**Пользователи.** Регистрация по умолчанию закрыта. Для демонстрации или команды аналитиков поставьте
-`DD_OPEN_REGISTRATION=1` в `.env` и перезапустите `api`: каждый зарегистрируется на странице входа
-("Зарегистрироваться"), прогоны и рабочие области у всех свои. После этого флаг можно вернуть в `0`.
-
-**Датасет** — папка прогона модуля 2: `manifest.json` (необязательно) и `RESULTS/BEFORE*/`, `RESULTS/AFTER*/`, где имя
-файла — идентификатор заявки. Папки из `datasets/` видны в форме «Новый прогон»; архив `.zip` можно загрузить прямо из
-интерфейса. Каталог задаётся переменной `DD_DATASETS_PATH`.
-
-**Процедуры и проверки** — файлы `.py` в `procedures/` (подключаются как «размещённые в системе»). Выданные
-организаторами проверки положите в `procedures/checks/` — они исполняются без изменений:
+### 3. Настройте `.env`
 
 ```bash
-cp /путь/к/пакету/checks/check_*.py procedures/checks/ && docker compose restart api
+cp .env.example .env
 ```
 
+В `.env` замените `DD_ADMIN_PASSWORD`, `DD_PG_PASSWORD` и `DD_AMQP_PASSWORD` на свои. Для локальной проверки подойдут и
+значения из примера. Если пароль не задан, compose остановится и подскажет, какой переменной не хватает. Остальные
+переменные можно не трогать.
+
+### 4. Положите данные и проверки
+
+Датасеты и проверки организаторов в репозиторий не входят (см. `.gitignore`), их нужно положить вручную:
+
+```bash
+cp -r /путь/к/RUN-20260827-0001 datasets/                        # папка прогона: manifest.json + RESULTS/BEFORE*/ + RESULTS/AFTER*/
+cp /путь/к/пакету/checks/check_*.py procedures/checks/            # выданные проверки, исполняются без изменений
+```
+
+Отложенный прогон (HOLDOUT) кладётся рядом так же: `datasets/RUN-20260827-0001-HOLDOUT/`. Датасет можно добавить и
+после запуска: любая папка в `datasets/` сразу появляется в форме «Новый прогон», а архив `.zip` загружается прямо из
+интерфейса.
+
+### 5. Запустите
+
+```bash
+docker compose up -d --build    # первая сборка 3–10 минут (скачиваются образы и зависимости), дальше секунды
+docker compose ps               # postgres, rabbitmq, api — healthy; worker — running
+```
+
+### 6. Убедитесь, что всё работает
+
+```bash
+curl -s http://localhost:8080/healthz                                       # {"ok":true}
+docker compose exec worker dd submit /datasets/RUN-20260827-0001 --wait     # прогон из командной строки, через брокер и песочницу
+```
+
+На открытом датасете должно получиться `done in ~2–3 s` и
+`'apps': 2002, 'changed_apps': 502, 'comparison_rows': 289533`: это эталонные 2002 заявки, 502 с различиями по существу
+и 289 533 строки витрины сравнения.
+
+Затем откройте http://localhost:8080 и войдите как `admin` с паролем `DD_ADMIN_PASSWORD` из `.env`. Прогон
+поставляемой конфигурации «СПР кредиты» запускается в интерфейсе так: **Конфигурации** → «Из готовой: СПР кредиты» →
+«Запустить ▶» → выбрать папку прогона → «Запустить». В «Обзоре» отчёта будут 502 заявки с различиями и 385 со сменой
+решения.
+
+**Пользователи.** В `.env.example` стоит `DD_OPEN_REGISTRATION=1`, поэтому каждый эксперт может зарегистрироваться
+на странице входа («Зарегистрироваться»). Прогоны и рабочие области у всех свои. В общей сети поставьте `0` и
+выполните `docker compose up -d api`. Если открыть приложение по адресу машины в сети, оно тоже работает, но без HTTPS
+сессия передаётся открытым текстом.
+
+**Управление.** Остановить: `docker compose down`, данные при этом остаются в томах. Начать с нуля:
+`docker compose down -v`, эта команда удаляет пользователей, прогоны и очередь. Обновить после `git pull`:
+`docker compose up -d --build`. Логи: `docker compose logs -f api worker`.
+
+### Если что-то не так
+
+| Симптом | Что сделать |
+|---|---|
+| `port is already allocated` / `address already in use` | Порт занят локальным PostgreSQL, RabbitMQ или другим сервисом. Задайте в `.env` свободные `DD_HTTP_PORT` (по умолчанию 8080), `DD_PG_PORT` (5432) и `DD_AMQP_PORT` (5672). Порт 15672 (консоль RabbitMQ) должен быть свободен |
+| `set DD_..._PASSWORD in .env` | Нет `.env` или в нём пустой пароль: см. шаг 3 |
+| Прогон падает с `Landlock or libseccomp is not available` | Ядро без Landlock (нужен Linux 5.13+ с включённым LSM `landlock`; есть в Ubuntu 22.04+, Debian 12+, Docker Desktop). Проверка: `docker compose exec worker python -c "from decision_diff.sandbox import landlock_abi; print(landlock_abi())"` — должно вывести число больше 0. Только для стенда без чужого кода: `DD_SANDBOX=off` в `.env` и `docker compose up -d worker` |
+| Воркер перезапускается, `OOMKilled` | Docker Desktop выделил мало памяти: Settings → Resources → Memory не меньше 6 ГБ |
+| Форма «Новый прогон» пуста | Нет папок в `datasets/` (шаг 4), или в `DD_DATASETS_PATH` указан другой каталог |
+| Сборка падает на `npm ci` / `uv sync` | Нет доступа к npm, PyPI или Docker Hub. Нужен интернет или прокси (`HTTP(S)_PROXY` для Docker) |
+
+
+**Процедуры и проверки** — файлы `.py` в `procedures/`; изменения подхватываются после `docker compose restart api`.
 Свои процедуры и проверки можно писать в «Рабочей области» приложения.
 
 ## Как пользоваться (сценарий демонстрации)
