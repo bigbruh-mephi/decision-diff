@@ -53,9 +53,13 @@ export function JournalView({ runId, live, l }: { runId: string; live: unknown[]
   if (j.isLoading) return <Skeleton rows={8} />;
   if (j.error || !j.data) return <ErrorBox error={j.error} />;
   const { stages, chunks, events } = j.data;
+  // A bar starts at the stage's first start on the run timeline; its length is the summed time from the column (chunks
+  // run in parallel, so the wall-clock span would make every stage look alike), on one scale that keeps all bars in view
   const t0 = stages.length ? Math.min(...stages.map((s) => new Date(s.started_at).getTime())) : 0;
-  const t1 = stages.length ? Math.max(...stages.map((s) => new Date(s.ended_at).getTime())) : 1;
-  const span = Math.max(1, t1 - t0);
+  const span = Math.max(1, (stages.length ? Math.max(...stages.map((s) => new Date(s.ended_at).getTime())) : 1) - t0);
+  const left = (s: (typeof stages)[number]) => ((new Date(s.started_at).getTime() - t0) / span) * 100;
+  const timed = stages.filter((s) => s.cpu_ms > 0);
+  const scale = timed.length ? Math.min(...timed.map((s) => (100 - left(s)) / s.cpu_ms)) : 0;
   return (
     <div className="flex flex-col gap-4">
       <Card>
@@ -68,14 +72,12 @@ export function JournalView({ runId, live, l }: { runId: string; live: unknown[]
                 <th className="px-2 py-2 font-medium">Выполнений</th>
                 <th className="px-2 py-2 text-right font-medium">Строк вход → выход</th>
                 <th className="px-2 py-2 text-right font-medium" title="Суммарное время по всем порциям">Время</th>
-                <th className="w-1/3 px-2 py-2 font-medium">Шкала времени</th>
+                <th className="w-1/3 px-2 py-2 font-medium" title="Полоса начинается в момент старта этапа, ее длина пропорциональна времени этапа">Начало и длительность</th>
                 <th className="px-4 py-2 font-medium">Код</th>
               </tr>
             </thead>
             <tbody>
-              {stages.map((s) => {
-                const a = new Date(s.started_at).getTime();
-                const b = new Date(s.ended_at).getTime();
+              {[...stages].sort((x, y) => new Date(x.started_at).getTime() - new Date(y.started_at).getTime()).map((s) => {
                 return (
                   <tr key={s.stage + s.code_sha} className="border-b border-line last:border-0">
                     <td className="px-4 py-2">
@@ -89,7 +91,7 @@ export function JournalView({ runId, live, l }: { runId: string; live: unknown[]
                     <td className="num px-2 py-2 text-right">{ms(s.cpu_ms)}</td>
                     <td className="px-2 py-2">
                       <div className="relative h-2 rounded-full bg-surface-2">
-                        <div className="absolute h-full rounded-full bg-muted/60" style={{ left: `${((a - t0) / span) * 100}%`, width: `${Math.max(1, ((b - a) / span) * 100)}%` }} />
+                        <div className="absolute h-full rounded-full bg-muted/60" style={{ left: `${left(s)}%`, width: `${Math.min(100 - left(s), Math.max(1, s.cpu_ms * scale))}%` }} />
                       </div>
                     </td>
                     <td className="px-4 py-2">
